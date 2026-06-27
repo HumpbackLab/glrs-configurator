@@ -1,4 +1,6 @@
 import './styles.css';
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 const DEFAULT_API = 'http://10.0.0.1';
 const API_STORAGE_KEY = 'elrs-local-rx-api';
@@ -25,7 +27,18 @@ const state = {
   eulerPitch: 0,
   eulerYaw: 0,
   orientationCal: null,
+  debugSample: null,
+  debugError: '',
+  debugPolling: false,
+  debugPollRateHz: 20,
 };
+
+let debugPollTimer = null;
+let debugPollInFlight = false;
+let debugPollGeneration = 0;
+let debugAircraftView = null;
+
+const DEG_TO_RAD = Math.PI / 180;
 
 const tabs = [
   ['status', 'Status'],
@@ -33,6 +46,7 @@ const tabs = [
   ['model', 'Model'],
   ['pwm', 'PWM'],
   ['flight', 'Flight'],
+  ['debug', 'Debug'],
   ['hardware', 'Hardware JSON'],
   ['wifi', 'WiFi'],
   ['update', 'Update'],
@@ -903,6 +917,136 @@ async function forceUpdate(action) {
   }, action === 'confirm' ? 'Forced update confirmed' : 'Forced update cancelled');
 }
 
+async function tauriInvoke(command, args = {}) {
+  const api = await import('@tauri-apps/api/core');
+  return api.invoke(command, args);
+}
+
+function formatDebugValue(value, digits = 2, suffix = '') {
+  return Number.isFinite(value) ? `${value.toFixed(digits)}${suffix}` : 'Waiting...';
+}
+
+function createFallbackAircraft() {
+  const group = new THREE.Group();
+  const material = new THREE.MeshStandardMaterial({color: 0xd8dee6, metalness: 0.15, roughness: 0.55});
+  const accent = new THREE.MeshStandardMaterial({color: 0x1f7a6d, metalness: 0.2, roughness: 0.5});
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.28, 1.4, 24), accent);
+  nose.rotation.z = -Math.PI / 2;
+  nose.position.x = 0.65;
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.26, 0.22), material);
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.05, 2.8), material);
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.05, 0.9), accent);
+  tail.position.x = -0.9;
+  tail.position.y = 0.12;
+  const fin = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.65, 0.05), accent);
+  fin.position.x = -0.92;
+  fin.position.y = 0.35;
+  group.add(body, nose, wing, tail, fin);
+  return group;
+}
+
+function disposeDebugAircraftView() {
+  if (!debugAircraftView) return;
+  window.removeEventListener('resize', debugAircraftView.resize);
+  debugAircraftView.renderer?.dispose();
+  debugAircraftView = null;
+}
+
+function initDebugAircraftView() {
+  const canvas = document.getElementById('debug-aircraft-canvas');
+  const wrapper = document.getElementById('debug-aircraft-wrapper');
+  if (!canvas || !wrapper) {
+    disposeDebugAircraftView();
+    return;
+  }
+  if (debugAircraftView?.canvas === canvas) {
+    debugAircraftView.resize();
+    return;
+  }
+  disposeDebugAircraftView();
+
+  const renderer = new THREE.WebGLRenderer({canvas, alpha: true, antialias: true, preserveDrawingBuffer: true});
+  renderer.setClearColor(0x000000, 0);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+  camera.position.set(0, 1.5, 7);
+  camera.lookAt(0, 0, 0);
+
+  const modelWrapper = new THREE.Object3D();
+  let model = createFallbackAircraft();
+  model.scale.set(1.4, 1.4, 1.4);
+  modelWrapper.add(model);
+  scene.add(modelWrapper);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x9aa4b2, 1.1));
+  const keyLight = new THREE.DirectionalLight(0xffffff, 1.8);
+  keyLight.position.set(2.5, 4, 3);
+  scene.add(keyLight);
+
+  const view = {
+    canvas,
+    renderer,
+    scene,
+    camera,
+    modelWrapper,
+    get model() {
+      return model;
+    },
+    set model(nextModel) {
+      modelWrapper.remove(model);
+      model = nextModel;
+      modelWrapper.add(model);
+    },
+    resize() {
+      const rect = wrapper.getBoundingClientRect();
+      const width = Math.max(1, Math.floor(rect.width));
+      const height = Math.max(1, Math.floor(rect.height));
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      updateDebugAircraftAttitude(state.debugSample);
+    },
+    render() {
+      renderer.render(scene, camera);
+    },
+  };
+
+  debugAircraftView = view;
+  window.addEventListener('resize', view.resize);
+
+  new GLTFLoader().load(
+    '/models/model_rudderless_plane.gltf',
+    (gltf) => {
+      if (debugAircraftView !== view) return;
+      const loadedModel = gltf.scene;
+      loadedModel.scale.set(0.5, 0.5, 0.5);
+      const box = new THREE.Box3().setFromObject(loadedModel);
+      const center = box.getCenter(new THREE.Vector3());
+      loadedModel.position.sub(center);
+      view.model = loadedModel;
+      updateDebugAircraftAttitude(state.debugSample);
+    },
+    undefined,
+    () => {
+      view.render();
+    },
+  );
+
+  view.resize();
+}
+
+function updateDebugAircraftAttitude(sample) {
+  if (!debugAircraftView?.model || !sample) {
+    debugAircraftView?.render();
+    return;
+  }
+  debugAircraftView.model.rotation.x = sample.pitch_deg * -DEG_TO_RAD;
+  debugAircraftView.modelWrapper.rotation.y = sample.yaw_deg * -DEG_TO_RAD;
+  debugAircraftView.model.rotation.z = sample.roll_deg * -DEG_TO_RAD;
+  debugAircraftView.render();
+}
+
 function renderStatus() {
   const c = config();
   const h = hardware();
@@ -1264,6 +1408,69 @@ function renderFlight() {
     </section>`;
 }
 
+function renderDebug() {
+  const sample = state.debugSample;
+  const attitudeErrorRoll = sample ? sample.roll_deg - sample.accel_roll_deg : NaN;
+  const attitudeErrorPitch = sample ? sample.pitch_deg - sample.accel_pitch_deg : NaN;
+  return `
+    <div class="grid">
+      <section class="panel">
+        <h2>MSP Debug Polling</h2>
+        <div class="row">
+          <label for="debug-poll-rate">Poll Rate</label>
+          <select id="debug-poll-rate">
+            <option value="10" ${selected(state.debugPollRateHz, 10)}>10 Hz</option>
+            <option value="20" ${selected(state.debugPollRateHz, 20)}>20 Hz</option>
+            <option value="50" ${selected(state.debugPollRateHz, 50)}>50 Hz</option>
+          </select>
+        </div>
+        <div class="actions">
+          <button class="primary" type="button" data-action="debug-start" ${state.debugPolling ? 'disabled' : ''}>Start Polling</button>
+          <button class="secondary" type="button" data-action="debug-stop" ${state.debugPolling ? '' : 'disabled'}>Stop</button>
+        </div>
+        <div id="debug-error" class="notice" style="display:${state.debugError ? 'block' : 'none'}">${escapeHtml(state.debugError)}</div>
+        <div class="helper">Uses MSP v2 command <code>MSP_ELRS_FC_DEBUG</code> on TCP port 5761. Native TCP polling requires the Tauri app shell.</div>
+      </section>
+      <section class="panel">
+        <h2>Attitude</h2>
+        <div class="metric"><span>Roll</span><strong id="debug-roll">${formatDebugValue(sample?.roll_deg, 2, ' deg')}</strong></div>
+        <div class="metric"><span>Pitch</span><strong id="debug-pitch">${formatDebugValue(sample?.pitch_deg, 2, ' deg')}</strong></div>
+        <div class="metric"><span>Yaw</span><strong id="debug-yaw">${formatDebugValue(sample?.yaw_deg, 2, ' deg')}</strong></div>
+        <div class="metric"><span>Accel Roll Ref</span><strong id="debug-accel-roll">${formatDebugValue(sample?.accel_roll_deg, 2, ' deg')}</strong></div>
+        <div class="metric"><span>Accel Pitch Ref</span><strong id="debug-accel-pitch">${formatDebugValue(sample?.accel_pitch_deg, 2, ' deg')}</strong></div>
+        <div class="metric"><span>Roll/Pitch Error</span><strong id="debug-error-angle">${formatDebugValue(attitudeErrorRoll, 2, ' deg')} / ${formatDebugValue(attitudeErrorPitch, 2, ' deg')}</strong></div>
+      </section>
+      <section class="panel debug-aircraft-panel">
+        <h2>Aircraft Attitude</h2>
+        <div id="debug-aircraft-wrapper" class="debug-aircraft-wrapper">
+          <canvas id="debug-aircraft-canvas" aria-label="3D aircraft attitude"></canvas>
+        </div>
+      </section>
+    </div>`;
+}
+
+function updateDebugView() {
+  const sample = state.debugSample;
+  const fields = {
+    'debug-roll': formatDebugValue(sample?.roll_deg, 2, ' deg'),
+    'debug-pitch': formatDebugValue(sample?.pitch_deg, 2, ' deg'),
+    'debug-yaw': formatDebugValue(sample?.yaw_deg, 2, ' deg'),
+    'debug-accel-roll': formatDebugValue(sample?.accel_roll_deg, 2, ' deg'),
+    'debug-accel-pitch': formatDebugValue(sample?.accel_pitch_deg, 2, ' deg'),
+    'debug-error-angle': `${formatDebugValue(sample ? sample.roll_deg - sample.accel_roll_deg : NaN, 2, ' deg')} / ${formatDebugValue(sample ? sample.pitch_deg - sample.accel_pitch_deg : NaN, 2, ' deg')}`,
+  };
+  Object.entries(fields).forEach(([id, value]) => {
+    const element = document.getElementById(id);
+    if (element) element.textContent = value;
+  });
+  const errorElement = document.getElementById('debug-error');
+  if (errorElement) {
+    errorElement.textContent = state.debugError || '';
+    errorElement.style.display = state.debugError ? 'block' : 'none';
+  }
+  updateDebugAircraftAttitude(sample);
+}
+
 function renderHardwareJson() {
   return `
     <section class="panel">
@@ -1321,6 +1528,7 @@ function renderCurrentTab() {
     model: renderModel,
     pwm: renderPwm,
     flight: renderFlight,
+    debug: renderDebug,
     hardware: renderHardwareJson,
     wifi: renderWifi,
     update: renderUpdate,
@@ -1465,6 +1673,70 @@ function wirePwmForm() {
   syncSerial2Visibility();
 }
 
+async function pollDebugOnce() {
+  if (debugPollInFlight) return;
+  const generation = debugPollGeneration;
+  debugPollInFlight = true;
+  try {
+    const sample = await tauriInvoke('msp_debug_poll');
+    if (generation !== debugPollGeneration || !state.debugPolling) return;
+    if (!sample) return;
+    state.debugSample = sample;
+    state.debugError = '';
+    updateDebugView();
+  } catch (error) {
+    if (generation !== debugPollGeneration || !state.debugPolling) return;
+    state.debugError = error.message || String(error);
+    updateDebugView();
+  } finally {
+    debugPollInFlight = false;
+  }
+}
+
+function scheduleDebugPoll() {
+  if (!state.debugPolling || debugPollTimer) return;
+  const intervalMs = Math.max(20, Math.round(1000 / state.debugPollRateHz));
+  debugPollTimer = window.setTimeout(async () => {
+    debugPollTimer = null;
+    await pollDebugOnce();
+    scheduleDebugPoll();
+  }, intervalMs);
+}
+
+async function startDebugPolling() {
+  state.debugPollRateHz = intOrDefault(document.querySelector('#debug-poll-rate')?.value, 20);
+  state.debugError = '';
+  try {
+    await tauriInvoke('msp_debug_connect', {apiBase: state.apiBase});
+    debugPollGeneration += 1;
+    state.debugPolling = true;
+    render();
+    await pollDebugOnce();
+    scheduleDebugPoll();
+  } catch (error) {
+    state.debugPolling = false;
+    state.debugError = error.message || String(error);
+    render();
+  }
+}
+
+async function stopDebugPolling(disconnect = true) {
+  debugPollGeneration += 1;
+  if (debugPollTimer) {
+    window.clearTimeout(debugPollTimer);
+    debugPollTimer = null;
+  }
+  state.debugPolling = false;
+  render();
+  if (disconnect) {
+    try {
+      await tauriInvoke('msp_debug_disconnect');
+    } catch {
+      // Browser preview has no Tauri backend.
+    }
+  }
+}
+
 function render() {
   document.querySelector('#app').innerHTML = `
     <div class="app">
@@ -1570,6 +1842,7 @@ function wireEvents() {
   wireOrientationPreview();
   wirePwmForm();
   wireChannelSliders();
+  initDebugAircraftView();
 
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -1585,6 +1858,8 @@ function wireEvents() {
       if (action === 'add-motor') { state.extraMixerRows = (state.extraMixerRows || 0) + 1; render(); }
       if (action === 'remove-motor') { state.extraMixerRows = Math.max(0, (state.extraMixerRows || 0) - 1); render(); }
       if (action === 'quick-orientation') quickOrientationStep();
+      if (action === 'debug-start') startDebugPolling();
+      if (action === 'debug-stop') stopDebugPolling();
       if (action === 'force-confirm') forceUpdate('confirm');
       if (action === 'force-cancel') forceUpdate('cancel');
     });

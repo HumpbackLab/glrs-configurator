@@ -1,12 +1,15 @@
 # Dependencies
 node_modules/
+app/node_modules/
 
 # Frontend build output
 dist/
+app/dist/
 
 # Tauri and Rust build output
-src-tauri/target/
-src-tauri/gen/
+target/
+app/src-tauri/target/
+app/src-tauri/gen/
 
 # Logs and diagnostics
 *.log
@@ -34,5 +37,6 @@ Thumbs.db
 *.tmp
 *.temp
 .cache/
-node_modules/.vite/
-node_modules/.vite-temp/
+.vite/
+app/node_modules/.vite/
+app/node_modules/.vite-temp/

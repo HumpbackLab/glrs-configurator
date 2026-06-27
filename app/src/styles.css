@@ -610,6 +610,28 @@ button:disabled {
   white-space: pre;
 }
 
+.debug-aircraft-panel {
+  min-height: 360px;
+}
+
+.debug-aircraft-wrapper {
+  background:
+    linear-gradient(180deg, rgba(31, 122, 109, 0.08), rgba(23, 32, 51, 0.03)),
+    #f8fafc;
+  border: 1px solid #d8dee6;
+  border-radius: 8px;
+  height: clamp(280px, 36vw, 440px);
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.debug-aircraft-wrapper canvas {
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
 @media (max-width: 760px) {
   .topbar {
     align-items: stretch;
