@@ -1,0 +1,232 @@
+{
+  "app": {
+    "title": "Gyro ELRS 配置工具",
+    "subtitle": "本地 RX Web UI 同款功能"
+  },
+  "tab": {
+    "status": "状态",
+    "runtime": "运行",
+    "model": "模型",
+    "pwm": "PWM",
+    "flight": "飞控",
+    "debug": "调试",
+    "hardware": "硬件 JSON",
+    "wifi": "WiFi",
+    "update": "更新"
+  },
+  "action": {
+    "connect": "连接",
+    "refresh": "刷新",
+    "save": "保存",
+    "reboot": "重启",
+    "resetModel": "重置模型",
+    "resetHardware": "重置硬件",
+    "scan": "扫描",
+    "saveConnect": "保存并连接",
+    "connectHome": "连接家庭网络",
+    "accessPoint": "AP 模式",
+    "forget": "忘记网络",
+    "upload": "上传",
+    "download": "下载当前固件",
+    "flashAnyway": "强制刷写",
+    "cancel": "取消",
+    "addMotor": "添加电机",
+    "removeMotor": "移除电机",
+    "startPolling": "开始轮询",
+    "stop": "停止"
+  },
+  "notice": {
+    "working": "处理中...",
+    "rateLoop": "Rate 回路始终启用。Angle 回路仅在开关打开时生效。"
+  },
+  "status": {
+    "device": "设备",
+    "rx": "接收机",
+    "sensors": "传感器",
+    "target": "目标",
+    "product": "产品",
+    "firmware": "固件",
+    "domain": "区域",
+    "uidType": "UID 类型",
+    "modelId": "模型 ID",
+    "serialProtocol": "串口协议",
+    "flightAngleLoop": "飞控角度回路",
+    "ch5MotorArm": "CH5 电机解锁",
+    "gyro": "陀螺仪",
+    "vbat": "电池电压"
+  },
+  "runtime": {
+    "heading": "运行时选项",
+    "wifiInterval": "WiFi 自动开启间隔（秒）",
+    "uartBaud": "UART 波特率",
+    "lockOnFirst": "首次连接后锁定",
+    "airport": "作为 AirPort 串口设备"
+  },
+  "model": {
+    "heading": "模型",
+    "bindStorage": "绑定存储",
+    "bindingPhrase": "绑定短语",
+    "generatedUid": "生成的 UID 字节",
+    "enableModelMatch": "启用模型匹配",
+    "modelId": "模型 ID",
+    "serialProtocol": "串口协议",
+    "sbusFailsafe": "SBUS 失控保护",
+    "forceTelemetry": "强制关闭遥测",
+    "help": {
+      "bindingPhrase": "绑定短语不会被记住，仅用于生成下方的 UID 字节。"
+    }
+  },
+  "pwm": {
+    "heading": "PWM 输出",
+    "headingShort": "PWM",
+    "noPwmNotice": "此目标未通过 <code>/config</code> 暴露 PWM 输出。",
+    "offlineNotice": "未连接设备。显示离线预览（默认值）。",
+    "help": {
+      "general": "配置各接收机输出引脚的通道模式、输入来源、反转、脉冲宽度和失控保护。<code>Invert</code> 将控制值以 <code>1500us</code> 为中心镜像。<code>Polarity</code> 存储原始信号极性标志，实际效果取决于当前平台和输出模式。比 <code>Serial RX/TX</code> 更高的模式为独占模式，只能分配给一个输出。",
+      "serial2": "当有输出被分配给 <code>Serial2 TX</code> 时显示。"
+    },
+    "output": "输出",
+    "pin": "引脚",
+    "features": "功能",
+    "mode": "模式",
+    "source": "来源",
+    "input": "输入",
+    "invert": "反转",
+    "polarityInvert": "极性反转",
+    "narrow": "750us",
+    "failsafe": "失控保护",
+    "position": "位置",
+    "sourceRc": "RC",
+    "sourceMixer": "混控器",
+    "serial2Protocol": "Serial2 协议"
+  },
+  "flight": {
+    "heading": "飞控",
+    "angleEnabled": "启用角度回路",
+    "armEnabled": "CH5 电机解锁启用",
+    "ratePid": "Rate PID",
+    "anglePid": "Angle PID",
+    "mixer": "混控器",
+    "boardOrientation": "飞控安装方向",
+    "roll": "Roll",
+    "pitch": "Pitch",
+    "yaw": "Yaw",
+    "kp": "Kp",
+    "ki": "Ki",
+    "kd": "Kd",
+    "iLimit": "I 限幅",
+    "axis": "轴",
+    "motor": "电机",
+    "motors": "个电机",
+    "throttle": "油门",
+    "boardLabel": "前"
+  },
+  "debug": {
+    "headingPolling": "MSP 调试轮询",
+    "headingAttitude": "姿态",
+    "headingAircraft": "飞机姿态",
+    "pollRate": "轮询速率",
+    "accelRollRef": "加速度计 Roll 参考",
+    "accelPitchRef": "加速度计 Pitch 参考",
+    "rollPitchError": "Roll/Pitch 误差",
+    "help": {
+      "polling": "使用 MSP v2 命令 <code>MSP_ELRS_FC_DEBUG</code>，通过 TCP 端口 5761 轮询。原生 TCP 轮询需要 Tauri 应用环境。"
+    },
+    "canvasLabel": "3D 飞行器姿态"
+  },
+  "hardware": {
+    "heading": "硬件 JSON",
+    "params": "硬件参数"
+  },
+  "wifi": {
+    "homeNetwork": "家庭网络",
+    "wifiMode": "WiFi 模式",
+    "ssid": "SSID",
+    "password": "密码"
+  },
+  "update": {
+    "heading": "固件更新",
+    "firmwareFile": "固件文件",
+    "failed": "固件更新失败 ({status})",
+    "phase": {
+      "uploading": "正在上传固件",
+      "finalizing": "设备端正在处理",
+      "rebooting": "设备已接受更新，正在重启"
+    }
+  },
+  "value": {
+    "unknown": "未知",
+    "enabled": "已启用",
+    "disabled": "已禁用",
+    "detected": "已检测",
+    "notDetected": "未检测",
+    "waiting": "等待中...",
+    "modified": "已修改"
+  },
+  "placeholder": {
+    "disabled": "已禁用"
+  },
+  "bindStorage": {
+    "persistent": "持久存储",
+    "volatile": "易失存储",
+    "returnable": "可归还",
+    "administered": "托管模式"
+  },
+  "pwmFailsafe": {
+    "setPosition": "固定位置",
+    "noPulses": "无脉冲",
+    "lastPosition": "保持最后位置"
+  },
+  "sbusFailsafe": {
+    "noPulses": "无脉冲",
+    "lastPosition": "保持最后位置"
+  },
+  "orient": {
+    "instructionLevel": "将模型水平放置于预期的平飞姿态，然后点击下方按钮。",
+    "instructionNoseUp": "已记录水平姿态。将模型尾部朝下竖立，使前方指向天空，然后点击下方按钮。",
+    "sampleLevel": "采集水平姿态",
+    "sampleNoseUp": "采集机头朝上姿态",
+    "levelCaptured": "已记录水平姿态。将模型尾部朝下竖立，使前方指向天空，然后点击「采集机头朝上姿态」。",
+    "setResult": "飞控安装角度已设为 roll={roll}, pitch={pitch}, yaw={yaw}。点击保存生效。"
+  },
+  "message": {
+    "connected": "已连接",
+    "refreshed": "已刷新",
+    "rebootRequested": "已请求重启",
+    "modelReset": "模型设置已重置",
+    "hardwareReset": "硬件设置已重置",
+    "runtimeSaved": "运行时选项已保存",
+    "modelSaved": "模型配置已保存",
+    "pwmSaved": "PWM 配置已保存",
+    "flightSaved": "飞控设置已保存",
+    "hardwareSaved": "硬件 JSON 已保存",
+    "networkScanComplete": "网络扫描完成",
+    "scanStarted": "扫描已启动，几秒后再次刷新",
+    "homeNetworkSaved": "家庭网络已保存，设备正在切换 WiFi 模式",
+    "connectingHome": "设备正在连接到家庭网络",
+    "switchingAp": "设备正在切换到 AP 模式",
+    "networkForgotten": "家庭网络已遗忘",
+    "uploadFinished": "固件上传完成",
+    "forceConfirmed": "已确认强制更新",
+    "forceCancelled": "已取消强制更新",
+    "selectFirmware": "请先选择固件文件"
+  },
+  "error": {
+    "timeout": "连接 {host} 超时",
+    "failedConnect": "连接 {host} 失败",
+    "pwmExclusive": "{mode} 已分配给输出 {output}",
+    "sampleInvalid": "IMU 加速度采样值过小或无效",
+    "notEnoughSamples": "来自 /status.json 的有效加速度计采样不足",
+    "sameAxis": "水平姿态和机头朝上姿态采样到了同一个 IMU 轴，请换一个面重新采集",
+    "missingCell": "{prefix}: 缺少单元格 row={row}, col={col}",
+    "invalidNumber": "{label}: row={row}, col={col} 数值无效",
+    "validateArrayInvalid": "{label}: 无效数值",
+    "validateArrayLength": "{label}: 需要 {exactLength} 个值",
+    "validateArrayAlignment": "{label}: 每行需要 {rowSize} 个值"
+  },
+  "lang": {
+    "label": "语言",
+    "chinese": "中文",
+    "english": "English"
+  }
+}

@@ -1,0 +1,232 @@
+{
+  "app": {
+    "title": "Gyro ELRS Configurator",
+    "subtitle": "Local RX Web UI parity"
+  },
+  "tab": {
+    "status": "Status",
+    "runtime": "Runtime",
+    "model": "Model",
+    "pwm": "PWM",
+    "flight": "Flight",
+    "debug": "Debug",
+    "hardware": "Hardware JSON",
+    "wifi": "WiFi",
+    "update": "Update"
+  },
+  "action": {
+    "connect": "Connect",
+    "refresh": "Refresh",
+    "save": "Save",
+    "reboot": "Reboot",
+    "resetModel": "Reset Model",
+    "resetHardware": "Reset Hardware",
+    "scan": "Scan",
+    "saveConnect": "Save & Connect",
+    "connectHome": "Connect Home",
+    "accessPoint": "Access Point",
+    "forget": "Forget Home",
+    "upload": "Upload",
+    "download": "Download Current Firmware",
+    "flashAnyway": "Flash Anyway",
+    "cancel": "Cancel",
+    "addMotor": "Add Motor",
+    "removeMotor": "Remove Motor",
+    "startPolling": "Start Polling",
+    "stop": "Stop"
+  },
+  "notice": {
+    "working": "Working...",
+    "rateLoop": "Rate loop is always active. Angle loop only applies when this switch is on."
+  },
+  "status": {
+    "device": "Device",
+    "rx": "RX",
+    "sensors": "Sensors",
+    "target": "Target",
+    "product": "Product",
+    "firmware": "Firmware",
+    "domain": "Domain",
+    "uidType": "UID Type",
+    "modelId": "Model ID",
+    "serialProtocol": "Serial Protocol",
+    "flightAngleLoop": "Flight Angle Loop",
+    "ch5MotorArm": "CH5 Motor Arm",
+    "gyro": "Gyro",
+    "vbat": "VBAT"
+  },
+  "runtime": {
+    "heading": "Runtime Options",
+    "wifiInterval": "WiFi auto-on interval seconds",
+    "uartBaud": "UART baud",
+    "lockOnFirst": "Lock on first connection",
+    "airport": "Use as AirPort serial device"
+  },
+  "model": {
+    "heading": "Model",
+    "bindStorage": "Binding storage",
+    "bindingPhrase": "Binding Phrase",
+    "generatedUid": "Generated UID bytes",
+    "enableModelMatch": "Enable Model Match",
+    "modelId": "Model ID",
+    "serialProtocol": "Serial Protocol",
+    "sbusFailsafe": "SBUS Failsafe",
+    "forceTelemetry": "Force telemetry off",
+    "help": {
+      "bindingPhrase": "The binding phrase is not remembered. It is only used to generate the UID bytes below."
+    }
+  },
+  "pwm": {
+    "heading": "PWM Output",
+    "headingShort": "PWM",
+    "noPwmNotice": "This target does not expose PWM outputs through <code>/config</code>.",
+    "offlineNotice": "Not connected to a device. Showing offline preview with default values.",
+    "help": {
+      "general": "Configure each receiver output pin mode, source channel, inversion, pulse width and failsafe. <code>Invert</code> mirrors the control value around <code>1500us</code>. <code>Polarity</code> stores the raw signal-polarity flag; whether it has an effect depends on the current platform and output mode. Modes above <code>Serial RX/TX</code> are exclusive and can only be assigned once.",
+      "serial2": "Shown when any output is assigned to <code>Serial2 TX</code>."
+    },
+    "output": "Output",
+    "pin": "Pin",
+    "features": "Features",
+    "mode": "Mode",
+    "source": "Source",
+    "input": "Input",
+    "invert": "Invert",
+    "polarityInvert": "PolarityInvert",
+    "narrow": "750us",
+    "failsafe": "Failsafe",
+    "position": "Position",
+    "sourceRc": "RC",
+    "sourceMixer": "Mixer",
+    "serial2Protocol": "Serial2 Protocol"
+  },
+  "flight": {
+    "heading": "Flight Control",
+    "angleEnabled": "Angle loop enabled",
+    "armEnabled": "CH5 motor arm enabled",
+    "ratePid": "Rate PID",
+    "anglePid": "Angle PID",
+    "mixer": "Mixer",
+    "boardOrientation": "Board Orientation",
+    "roll": "Roll",
+    "pitch": "Pitch",
+    "yaw": "Yaw",
+    "kp": "Kp",
+    "ki": "Ki",
+    "kd": "Kd",
+    "iLimit": "I limit",
+    "axis": "Axis",
+    "motor": "Motor",
+    "motors": "motors",
+    "throttle": "Throttle",
+    "boardLabel": "FW"
+  },
+  "debug": {
+    "headingPolling": "MSP Debug Polling",
+    "headingAttitude": "Attitude",
+    "headingAircraft": "Aircraft Attitude",
+    "pollRate": "Poll Rate",
+    "accelRollRef": "Accel Roll Ref",
+    "accelPitchRef": "Accel Pitch Ref",
+    "rollPitchError": "Roll/Pitch Error",
+    "help": {
+      "polling": "Uses MSP v2 command <code>MSP_ELRS_FC_DEBUG</code> on TCP port 5761. Native TCP polling requires the Tauri app shell."
+    },
+    "canvasLabel": "3D aircraft attitude"
+  },
+  "hardware": {
+    "heading": "Hardware JSON",
+    "params": "Hardware parameters"
+  },
+  "wifi": {
+    "homeNetwork": "Home Network",
+    "wifiMode": "WiFi Mode",
+    "ssid": "SSID",
+    "password": "Password"
+  },
+  "update": {
+    "heading": "Firmware Update",
+    "firmwareFile": "Firmware file",
+    "failed": "Firmware update failed ({status})",
+    "phase": {
+      "uploading": "Uploading firmware",
+      "finalizing": "Finalizing update on device",
+      "rebooting": "Device accepted update and is rebooting"
+    }
+  },
+  "value": {
+    "unknown": "unknown",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "detected": "Detected",
+    "notDetected": "Not detected",
+    "waiting": "Waiting...",
+    "modified": "Modified"
+  },
+  "placeholder": {
+    "disabled": "Disabled"
+  },
+  "bindStorage": {
+    "persistent": "Persistent",
+    "volatile": "Volatile",
+    "returnable": "Returnable",
+    "administered": "Administered"
+  },
+  "pwmFailsafe": {
+    "setPosition": "Set Position",
+    "noPulses": "No Pulses",
+    "lastPosition": "Last Position"
+  },
+  "sbusFailsafe": {
+    "noPulses": "No Pulses",
+    "lastPosition": "Last Position"
+  },
+  "orient": {
+    "instructionLevel": "Place the model level in the expected level attitude, then press the button below.",
+    "instructionNoseUp": "Level sampled. Stand the model on its tail so the expected forward direction points up, then press the button below.",
+    "sampleLevel": "Sample Level",
+    "sampleNoseUp": "Sample Nose Up",
+    "levelCaptured": "Level sample captured. Stand the model on its tail so the expected forward direction points up, then press Sample Nose Up.",
+    "setResult": "Board orientation set to roll={roll}, pitch={pitch}, yaw={yaw}. Press Save to write it."
+  },
+  "message": {
+    "connected": "Connected",
+    "refreshed": "Refreshed",
+    "rebootRequested": "Reboot requested",
+    "modelReset": "Model settings reset",
+    "hardwareReset": "Hardware settings reset",
+    "runtimeSaved": "Runtime options saved",
+    "modelSaved": "Model configuration saved",
+    "pwmSaved": "PWM configuration saved",
+    "flightSaved": "Flight control settings saved",
+    "hardwareSaved": "Hardware JSON saved",
+    "networkScanComplete": "Network scan complete",
+    "scanStarted": "Scan started; refresh again in a few seconds",
+    "homeNetworkSaved": "Home network saved; device is switching WiFi mode",
+    "connectingHome": "Device is connecting to the home network",
+    "switchingAp": "Device is switching to access point mode",
+    "networkForgotten": "Home network forgotten",
+    "uploadFinished": "Firmware upload finished",
+    "forceConfirmed": "Forced update confirmed",
+    "forceCancelled": "Forced update cancelled",
+    "selectFirmware": "Select a firmware file first"
+  },
+  "error": {
+    "timeout": "Timeout connecting to {host}",
+    "failedConnect": "Failed connecting to {host}",
+    "pwmExclusive": "{mode} is already assigned to output {output}",
+    "sampleInvalid": "IMU acceleration sample is too small or invalid",
+    "notEnoughSamples": "Not enough valid accelerometer samples from /status.json",
+    "sameAxis": "Level and nose-up samples snapped to the same IMU axis; rotate to a different face and sample again",
+    "missingCell": "{prefix}: missing cell {row}, {col}",
+    "invalidNumber": "{label}: invalid number at row {row}, column {col}",
+    "validateArrayInvalid": "{label}: invalid number",
+    "validateArrayLength": "{label}: expected {exactLength} values",
+    "validateArrayAlignment": "{label}: expected rows of {rowSize} values"
+  },
+  "lang": {
+    "label": "Language",
+    "chinese": "中文",
+    "english": "English"
+  }
+}

@@ -1,6 +1,7 @@
 import './styles.css';
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { t, setLocale, getLocale } from './i18n.js';
 
 const DEFAULT_API = 'http://10.0.0.1';
 const API_STORAGE_KEY = 'elrs-local-rx-api';
@@ -12,7 +13,6 @@ const state = {
   target: null,
   configResponse: null,
   hardware: null,
-  runtimeStatus: null,
   bindingPhrase: '',
   originalUid: [],
   originalUidType: '',
@@ -40,15 +40,15 @@ let debugAircraftView = null;
 const DEG_TO_RAD = Math.PI / 180;
 
 const tabs = [
-  ['status', 'Status'],
-  ['runtime', 'Runtime'],
-  ['model', 'Model'],
-  ['pwm', 'PWM'],
-  ['flight', 'Flight'],
-  ['debug', 'Debug'],
-  ['hardware', 'Hardware JSON'],
-  ['wifi', 'WiFi'],
-  ['update', 'Update'],
+  ['status', () => t('tab.status')],
+  ['runtime', () => t('tab.runtime')],
+  ['model', () => t('tab.model')],
+  ['pwm', () => t('tab.pwm')],
+  ['flight', () => t('tab.flight')],
+  ['debug', () => t('tab.debug')],
+  ['hardware', () => t('tab.hardware')],
+  ['wifi', () => t('tab.wifi')],
+  ['update', () => t('tab.update')],
 ];
 
 const serialProtocols = [
@@ -113,16 +113,16 @@ const pwmInputLabels = [
 ];
 
 const pwmFailsafeModes = [
-  'Set Position',
-  'No Pulses',
-  'Last Position',
+  () => t('pwmFailsafe.setPosition'),
+  () => t('pwmFailsafe.noPulses'),
+  () => t('pwmFailsafe.lastPosition'),
 ];
 
 const bindStorage = [
-  ['0', 'Persistent'],
-  ['1', 'Volatile'],
-  ['2', 'Returnable'],
-  ['3', 'Administered'],
+  ['0', () => t('bindStorage.persistent')],
+  ['1', () => t('bindStorage.volatile')],
+  ['2', () => t('bindStorage.returnable')],
+  ['3', () => t('bindStorage.administered')],
 ];
 
 const runtimeDefaults = {
@@ -175,7 +175,7 @@ async function apiFetch(path, options = {}) {
       ...(options.headers || {}),
     },
   }).catch((error) => {
-    if (error.name === 'AbortError') throw new Error(`Timeout connecting to ${state.apiBase}`);
+    if (error.name === 'AbortError') throw new Error(t('error.timeout', {host: state.apiBase}));
     throw error;
   }).finally(() => {
     window.clearTimeout(timeout);
@@ -232,8 +232,8 @@ function xhrRequest(path, options = {}) {
       resolve(parsedBody);
     };
 
-    xhr.onerror = () => reject(new Error(`Failed connecting to ${state.apiBase}`));
-    xhr.ontimeout = () => reject(new Error(`Timeout connecting to ${state.apiBase}`));
+    xhr.onerror = () => reject(new Error(t('error.failedConnect', {host: state.apiBase})));
+    xhr.ontimeout = () => reject(new Error(t('error.timeout', {host: state.apiBase})));
     xhr.send(body);
   });
 }
@@ -530,11 +530,11 @@ function readNumGrid(form, prefix, rowCount, colCount) {
     for (let col = 0; col < colCount; col += 1) {
       const input = form.querySelector(`[data-grid="${prefix}"][data-row="${row}"][data-col="${col}"]`);
       if (!input) {
-        throw new Error(`${prefix}: missing cell ${row + 1}, ${col + 1}`);
+        throw new Error(t('error.missingCell', {prefix, row: row + 1, col: col + 1}));
       }
       const parsed = Number.parseFloat(input.value);
       if (!Number.isFinite(parsed)) {
-        throw new Error(`${prefix}: invalid number at row ${row + 1}, column ${col + 1}`);
+        throw new Error(t('error.invalidNumber', {label: prefix, row: row + 1, col: col + 1}));
       }
       values.push(parsed);
     }
@@ -551,7 +551,7 @@ function syncBindingPreview() {
   const uidPreview = document.querySelector('#uid-preview');
   const uidType = document.querySelector('#uid-type');
   if (uidPreview) uidPreview.value = listToPrettyString(bindingUidPreview());
-  if (uidType) uidType.textContent = state.bindingPhrase.trim().length === 0 ? (state.originalUidType || 'Unknown') : 'Modified';
+  if (uidType) uidType.textContent = state.bindingPhrase.trim().length === 0 ? (state.originalUidType || t('value.unknown')) : t('value.modified');
 }
 
 function readForm(form) {
@@ -565,23 +565,21 @@ function intOrDefault(value, fallback) {
 
 function validateArray(label, value, rowSize, exactLength) {
   if (value === undefined) return true;
-  if (value === null) throw new Error(`${label}: invalid number`);
-  if (exactLength && value.length !== exactLength) throw new Error(`${label}: expected ${exactLength} values`);
-  if (!exactLength && value.length % rowSize !== 0) throw new Error(`${label}: expected rows of ${rowSize} values`);
+  if (value === null) throw new Error(t('error.validateArrayInvalid', {label}));
+  if (exactLength && value.length !== exactLength) throw new Error(t('error.validateArrayLength', {label, exactLength}));
+  if (!exactLength && value.length % rowSize !== 0) throw new Error(t('error.validateArrayAlignment', {label, rowSize}));
   return true;
 }
 
 async function loadDevice() {
-  const [target, configResponse, hardwareResponse, runtimeStatus] = await Promise.all([
+  const [target, configResponse, hardwareResponse] = await Promise.all([
     apiFetch('/target'),
     apiFetch('/config'),
     apiFetch('/hardware.json').catch(() => ({})),
-    apiFetch('/status.json').catch(() => null),
   ]);
   state.target = target;
   state.configResponse = configResponse;
   state.hardware = hardwareResponse;
-  state.runtimeStatus = runtimeStatus;
   state.extraMixerRows = 0;
   state.originalUid = bytesToList(configResponse?.config?.uid);
   state.originalUidType = configResponse?.config?.uidtype || '';
@@ -621,7 +619,7 @@ async function saveRuntime(event) {
   await runBusy(async () => {
     await apiFetch('/options.json', {method: 'POST', body: JSON.stringify(next)});
     await loadDevice();
-  }, 'Runtime options saved');
+  }, t('message.runtimeSaved'));
 }
 
 async function saveModel(event) {
@@ -641,7 +639,7 @@ async function saveModel(event) {
   await runBusy(async () => {
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(payload)});
     await loadDevice();
-  }, 'Model configuration saved');
+  }, t('message.modelSaved'));
 }
 
 async function savePwm(event) {
@@ -664,7 +662,7 @@ async function savePwm(event) {
     };
     if (mode > 9) {
       if (usedExclusiveModes.has(mode)) {
-        throw new Error(`${pwmModes[mode]} is already assigned to output ${usedExclusiveModes.get(mode)}`);
+        throw new Error(t('error.pwmExclusive', {mode: pwmModes[mode], output: usedExclusiveModes.get(mode)}));
       }
       usedExclusiveModes.set(mode, index + 1);
     }
@@ -685,7 +683,7 @@ async function savePwm(event) {
   await runBusy(async () => {
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(payload)});
     await loadDevice();
-  }, 'PWM configuration saved');
+  }, t('message.pwmSaved'));
 }
 
 async function saveFlight(event) {
@@ -703,7 +701,7 @@ async function saveFlight(event) {
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(nextConfig)});
     state.extraMixerRows = 0;
     await loadDevice();
-  }, 'Flight control settings saved');
+  }, t('message.flightSaved'));
 }
 
 function sleep(ms) {
@@ -717,7 +715,7 @@ function vectorLength(v) {
 function normalizeVector(v) {
   const length = vectorLength(v);
   if (!Number.isFinite(length) || length < 0.1) {
-    throw new Error('IMU acceleration sample is too small or invalid');
+    throw new Error(t('error.sampleInvalid'));
   }
   return v.map((value) => value / length);
 }
@@ -772,7 +770,7 @@ async function sampleRawAccel(sampleCount = 24, delayMs = 40) {
     if (i + 1 < sampleCount) await sleep(delayMs);
   }
   if (valid < Math.ceil(sampleCount * 0.75)) {
-    throw new Error('Not enough valid accelerometer samples from /status.json');
+    throw new Error(t('error.notEnoughSamples'));
   }
   return normalizeVector(sum.map((value) => value / valid));
 }
@@ -785,7 +783,7 @@ function orientationEulerFromSamples(levelRaw, forwardRaw) {
   const rowZ = nearestCardinalAxis(levelRaw);
   const rowX = nearestCardinalAxis(forwardRaw);
   if (Math.abs(dotVector(rowX, rowZ)) > 0) {
-    throw new Error('Level and nose-up samples snapped to the same IMU axis; rotate to a different face and sample again');
+    throw new Error(t('error.sameAxis'));
   }
   const rowY = crossVector(rowZ, rowX);
   const matrix = [...rowX, ...rowY, ...rowZ];
@@ -795,16 +793,16 @@ function orientationEulerFromSamples(levelRaw, forwardRaw) {
 
 function orientationCalText() {
   if (state.orientationCal?.level) {
-    return 'Level sampled. Stand the model on its tail so the expected forward direction points up, then press the button below.';
+    return t('orient.instructionNoseUp');
   }
-  return 'Place the model level in the expected level attitude, then press the button below.';
+  return t('orient.instructionLevel');
 }
 
 function orientationCalButtonText() {
   if (state.orientationCal?.level) {
-    return 'Sample Nose Up';
+    return t('orient.sampleNoseUp');
   }
-  return 'Sample Level';
+  return t('orient.sampleLevel');
 }
 
 function setEulerAngles(roll, pitch, yaw) {
@@ -818,7 +816,7 @@ async function quickOrientationStep() {
     if (!state.orientationCal?.level) {
       const level = await sampleRawAccel();
       state.orientationCal = {level};
-      setMessage('ok', 'Level sample captured. Stand the model on its tail so the expected forward direction points up, then press Sample Nose Up.');
+      setMessage('ok', t('orient.levelCaptured'));
       return;
     }
 
@@ -826,7 +824,7 @@ async function quickOrientationStep() {
     const result = orientationEulerFromSamples(state.orientationCal.level, forward);
     setEulerAngles(result.roll, result.pitch, result.yaw);
     state.orientationCal = null;
-    setMessage('ok', `Board orientation set to roll=${result.roll}, pitch=${result.pitch}, yaw=${result.yaw}. Press Save to write it.`);
+    setMessage('ok', t('orient.setResult', {roll: result.roll, pitch: result.pitch, yaw: result.yaw}));
   });
 }
 
@@ -837,14 +835,14 @@ async function saveHardwareJson(event) {
     next.customised = true;
     await apiFetch('/hardware.json', {method: 'POST', body: JSON.stringify(next)});
     await loadDevice();
-  }, 'Hardware JSON saved');
+  }, t('message.hardwareSaved'));
 }
 
 async function scanNetworks() {
   await runBusy(async () => {
     const result = await fetch(apiUrl('/networks.json'));
     state.networks = result.status === 204 ? [] : await result.json();
-  }, state.networks.length ? 'Network scan complete' : 'Scan started; refresh again in a few seconds');
+  }, state.networks.length ? t('message.networkScanComplete') : t('message.scanStarted'));
 }
 
 async function saveHomeNetwork(event) {
@@ -855,7 +853,7 @@ async function saveHomeNetwork(event) {
   form.set('password', data.password || '');
   await runBusy(async () => {
     await apiFetch('/sethome?save', {method: 'POST', body: form});
-  }, 'Home network saved; device is switching WiFi mode');
+  }, t('message.homeNetworkSaved'));
 }
 
 async function postPlain(path, successText) {
@@ -868,11 +866,11 @@ async function uploadFirmware(event) {
   event.preventDefault();
   const file = event.currentTarget.firmware.files[0];
   if (!file) {
-    setMessage('error', 'Select a firmware file first');
+    setMessage('error', t('message.selectFirmware'));
     return;
   }
   await runBusy(async () => {
-    state.uploadProgress = {loaded: 0, total: file.size, phase: 'Uploading firmware'};
+    state.uploadProgress = {loaded: 0, total: file.size, phase: t('update.phase.uploading')};
     render();
     const form = new FormData();
     form.set('update[]', file, file.name);
@@ -885,21 +883,21 @@ async function uploadFirmware(event) {
         state.uploadProgress = {
           loaded: progressEvent.loaded,
           total: progressEvent.lengthComputable ? progressEvent.total : file.size,
-          phase: progressEvent.loaded >= file.size ? 'Finalizing update on device' : 'Uploading firmware',
+          phase: progressEvent.loaded >= file.size ? t('update.phase.finalizing') : t('update.phase.uploading'),
         };
         render();
       },
     });
     state.uploadResult = result;
     if (result.status !== 'ok') {
-      throw new Error(result.msg || `Firmware update failed (${result.status || 'unknown'})`);
+      throw new Error(result.msg || t('update.failed', {status: result.status || 'unknown'}));
     }
     state.uploadProgress = {
       loaded: file.size,
       total: file.size,
-      phase: 'Device accepted update and is rebooting',
+      phase: t('update.phase.rebooting'),
     };
-  }, 'Firmware upload finished');
+  }, t('message.uploadFinished'));
   state.uploadProgress = null;
   render();
 }
@@ -909,7 +907,7 @@ async function forceUpdate(action) {
   form.set('action', action);
   await runBusy(async () => {
     state.uploadResult = await xhrRequest('/forceupdate', {method: 'POST', body: form, timeout: 90000});
-  }, action === 'confirm' ? 'Forced update confirmed' : 'Forced update cancelled');
+  }, action === 'confirm' ? t('message.forceConfirmed') : t('message.forceCancelled'));
 }
 
 async function tauriInvoke(command, args = {}) {
@@ -918,7 +916,7 @@ async function tauriInvoke(command, args = {}) {
 }
 
 function formatDebugValue(value, digits = 2, suffix = '') {
-  return Number.isFinite(value) ? `${value.toFixed(digits)}${suffix}` : 'Waiting...';
+  return Number.isFinite(value) ? `${value.toFixed(digits)}${suffix}` : t('value.waiting');
 }
 
 function createFallbackAircraft() {
@@ -1045,71 +1043,27 @@ function updateDebugAircraftAttitude(sample) {
 function renderStatus() {
   const c = config();
   const h = hardware();
-  const loop = state.runtimeStatus?.['main-loop'] || {};
-  const pwmIsr = state.runtimeStatus?.['pwm-isr'] || {};
-  const pwmCrash = state.runtimeStatus?.['pwm-crash'] || {};
-  const hasLoopSample = loop['sample-window-ms'] !== undefined && loop['sample-window-ms'] !== null;
-  const hasPwmIsrSample = pwmIsr['sample-window-ms'] !== undefined && pwmIsr['sample-window-ms'] !== null;
-  const loopValue = (key, suffix = '') => (
-    hasLoopSample && loop[key] !== undefined && loop[key] !== null ? `${loop[key]}${suffix}` : 'Waiting...'
-  );
-  const pwmIsrValue = (key, suffix = '') => (
-    hasPwmIsrSample && pwmIsr[key] !== undefined && pwmIsr[key] !== null ? `${pwmIsr[key]}${suffix}` : 'Waiting...'
-  );
-  const pwmCrashValue = (key, suffix = '') => (
-    pwmCrash[key] !== undefined && pwmCrash[key] !== null && pwmCrash[key] !== '' ? `${pwmCrash[key]}${suffix}` : 'Waiting...'
-  );
   return `
     <div class="grid">
       <section class="panel">
-        <h2>Device</h2>
-        <div class="metric"><span>Target</span><strong>${escapeHtml(state.target?.target || c.target || 'unknown')}</strong></div>
-        <div class="metric"><span>Product</span><strong>${escapeHtml(state.target?.product_name || c.product_name || 'unknown')}</strong></div>
-        <div class="metric"><span>Firmware</span><strong>${escapeHtml(state.target?.version || 'unknown')}</strong></div>
-        <div class="metric"><span>Domain</span><strong>${escapeHtml(state.target?.reg_domain || c.reg_domain || 'unknown')}</strong></div>
+        <h2>${t('status.device')}</h2>
+        <div class="metric"><span>${t('status.target')}</span><strong>${escapeHtml(state.target?.target || c.target || t('value.unknown'))}</strong></div>
+        <div class="metric"><span>${t('status.product')}</span><strong>${escapeHtml(state.target?.product_name || c.product_name || t('value.unknown'))}</strong></div>
+        <div class="metric"><span>${t('status.firmware')}</span><strong>${escapeHtml(state.target?.version || t('value.unknown'))}</strong></div>
+        <div class="metric"><span>${t('status.domain')}</span><strong>${escapeHtml(state.target?.reg_domain || c.reg_domain || t('value.unknown'))}</strong></div>
       </section>
       <section class="panel">
-        <h2>RX</h2>
-        <div class="metric"><span>UID Type</span><strong>${escapeHtml(c.uidtype || 'unknown')}</strong></div>
-        <div class="metric"><span>Model ID</span><strong>${escapeHtml(c.modelid ?? '255')}</strong></div>
-        <div class="metric"><span>Serial Protocol</span><strong>${escapeHtml(serialProtocols.find(([v]) => v === String(c['serial-protocol']))?.[1] || c['serial-protocol'] || 'CRSF')}</strong></div>
-        <div class="metric"><span>Flight Angle Loop</span><strong>${configValue('fc_angle_enabled', false) ? 'Enabled' : 'Disabled'}</strong></div>
-        <div class="metric"><span>CH5 Motor Arm</span><strong>${configValue('fc_arm_enabled', false) ? 'Enabled' : 'Disabled'}</strong></div>
+        <h2>${t('status.rx')}</h2>
+        <div class="metric"><span>${t('status.uidType')}</span><strong>${escapeHtml(c.uidtype || t('value.unknown'))}</strong></div>
+        <div class="metric"><span>${t('status.modelId')}</span><strong>${escapeHtml(c.modelid ?? '255')}</strong></div>
+        <div class="metric"><span>${t('status.serialProtocol')}</span><strong>${escapeHtml(serialProtocols.find(([v]) => v === String(c['serial-protocol']))?.[1] || c['serial-protocol'] || 'CRSF')}</strong></div>
+        <div class="metric"><span>${t('status.flightAngleLoop')}</span><strong>${configValue('fc_angle_enabled', false) ? t('value.enabled') : t('value.disabled')}</strong></div>
+        <div class="metric"><span>${t('status.ch5MotorArm')}</span><strong>${configValue('fc_arm_enabled', false) ? t('value.enabled') : t('value.disabled')}</strong></div>
       </section>
       <section class="panel">
-        <h2>Sensors</h2>
-        <div class="metric"><span>Gyro</span><strong>${state.target?.['has-gyro'] ? 'Detected' : 'Not detected'}</strong>${state.target?.['gyro-msg'] ? `<div class="diag-msg">${escapeHtml(state.target['gyro-msg']).replace(/\n/g, '<br>')}</div>` : ''}</div>
-        ${state.target?.['has-vbat'] ? `<div class="metric"><span>VBAT</span><strong>${(state.target['vbat-voltage'] * 0.01).toFixed(2)} V</strong></div>` : ''}
-      </section>
-      <section class="panel">
-        <h2>Main Loop</h2>
-        <div class="metric"><span>Sample Window</span><strong>${escapeHtml(loopValue('sample-window-ms', ' ms'))}</strong></div>
-        <div class="metric"><span>Loop Rate</span><strong>${escapeHtml(loopValue('loop-hz', ' Hz'))}</strong></div>
-        <div class="metric"><span>Average Period</span><strong>${escapeHtml(loopValue('avg-period-us', ' us'))}</strong></div>
-        <div class="metric"><span>Max Period</span><strong>${escapeHtml(loopValue('max-period-us', ' us'))}</strong></div>
-        <div class="metric"><span>Average Work</span><strong>${escapeHtml(loopValue('avg-work-us', ' us'))}</strong></div>
-        <div class="metric"><span>Max Work</span><strong>${escapeHtml(loopValue('max-work-us', ' us'))}</strong></div>
-      </section>
-      <section class="panel">
-        <h2>PWM ISR</h2>
-        <div class="metric"><span>Sample Window</span><strong>${escapeHtml(pwmIsrValue('sample-window-ms', ' ms'))}</strong></div>
-        <div class="metric"><span>ISR Calls</span><strong>${escapeHtml(pwmIsrValue('calls'))}</strong></div>
-        <div class="metric"><span>ISR Rate</span><strong>${escapeHtml(pwmIsrValue('rate-hz', ' Hz'))}</strong></div>
-        <div class="metric"><span>Average ISR</span><strong>${escapeHtml(pwmIsrValue('avg-us', ' us'))}</strong></div>
-        <div class="metric"><span>Max ISR</span><strong>${escapeHtml(pwmIsrValue('max-us', ' us'))}</strong></div>
-        <div class="metric"><span>Max Loop Count</span><strong>${escapeHtml(pwmIsrValue('max-loops'))}</strong></div>
-      </section>
-      <section class="panel">
-        <h2>PWM Crash</h2>
-        <div class="metric"><span>Boot Count</span><strong>${escapeHtml(pwmCrashValue('boot-count'))}</strong></div>
-        <div class="metric"><span>Suspicious Resets</span><strong>${escapeHtml(pwmCrashValue('suspicious-reset-count'))}</strong></div>
-        <div class="metric"><span>Reset Reason</span><strong>${escapeHtml(pwmCrashValue('reset-reason'))}</strong></div>
-        <div class="metric"><span>Active Stage</span><strong>${escapeHtml(pwmCrashValue('active-stage'))}</strong></div>
-        <div class="metric"><span>Active GPIO</span><strong>${escapeHtml(pwmCrashValue('active-gpio'))}</strong></div>
-        <div class="metric"><span>Active High/Low</span><strong>${escapeHtml(`${pwmCrashValue('active-high-us')} / ${pwmCrashValue('active-low-us')}`)}</strong></div>
-        <div class="metric"><span>Last Reset Stage</span><strong>${escapeHtml(pwmCrashValue('last-reset-stage'))}</strong></div>
-        <div class="metric"><span>Last Reset GPIO</span><strong>${escapeHtml(pwmCrashValue('last-reset-gpio'))}</strong></div>
-        <div class="metric"><span>Last Reset High/Low</span><strong>${escapeHtml(`${pwmCrashValue('last-reset-high-us')} / ${pwmCrashValue('last-reset-low-us')}`)}</strong></div>
+        <h2>${t('status.sensors')}</h2>
+        <div class="metric"><span>${t('status.gyro')}</span><strong>${state.target?.['has-gyro'] ? t('value.detected') : t('value.notDetected')}</strong>${state.target?.['gyro-msg'] ? `<div class="diag-msg">${escapeHtml(state.target['gyro-msg']).replace(/\n/g, '<br>')}</div>` : ''}</div>
+        ${state.target?.['has-vbat'] ? `<div class="metric"><span>${t('status.vbat')}</span><strong>${(state.target['vbat-voltage'] * 0.01).toFixed(2)} V</strong></div>` : ''}
       </section>
     </div>`;
 }
@@ -1118,13 +1072,13 @@ function renderRuntime() {
   const o = options();
   return `
     <section class="panel">
-      <h2>Runtime Options</h2>
+      <h2>${t('runtime.heading')}</h2>
       <form id="runtime-form">
-        <div class="row"><label for="wifi-on-interval">WiFi auto-on interval seconds</label><input id="wifi-on-interval" name="wifi-on-interval" value="${escapeHtml(optionValue('wifi-on-interval', runtimeDefaults['wifi-on-interval']))}" placeholder="Disabled"></div>
-        <div class="row"><label for="rcvr-uart-baud">UART baud</label><input id="rcvr-uart-baud" name="rcvr-uart-baud" value="${escapeHtml(optionValue('rcvr-uart-baud', runtimeDefaults['rcvr-uart-baud']))}" inputmode="numeric"></div>
-        <div class="check"><input id="lock-on-first-connection" name="lock-on-first-connection" type="checkbox" ${checked(optionValue('lock-on-first-connection', runtimeDefaults['lock-on-first-connection']))}><label for="lock-on-first-connection">Lock on first connection</label></div>
-        <div class="check"><input id="is-airport" name="is-airport" type="checkbox" ${checked(optionValue('is-airport', runtimeDefaults['is-airport']))}><label for="is-airport">Use as AirPort serial device</label></div>
-        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>Save</button><button class="secondary" type="button" data-action="reboot">Reboot</button></div>
+        <div class="row"><label for="wifi-on-interval">${t('runtime.wifiInterval')}</label><input id="wifi-on-interval" name="wifi-on-interval" value="${escapeHtml(optionValue('wifi-on-interval', runtimeDefaults['wifi-on-interval']))}" placeholder="${t('placeholder.disabled')}"></div>
+        <div class="row"><label for="rcvr-uart-baud">${t('runtime.uartBaud')}</label><input id="rcvr-uart-baud" name="rcvr-uart-baud" value="${escapeHtml(optionValue('rcvr-uart-baud', runtimeDefaults['rcvr-uart-baud']))}" inputmode="numeric"></div>
+        <div class="check"><input id="lock-on-first-connection" name="lock-on-first-connection" type="checkbox" ${checked(optionValue('lock-on-first-connection', runtimeDefaults['lock-on-first-connection']))}><label for="lock-on-first-connection">${t('runtime.lockOnFirst')}</label></div>
+        <div class="check"><input id="is-airport" name="is-airport" type="checkbox" ${checked(optionValue('is-airport', runtimeDefaults['is-airport']))}><label for="is-airport">${t('runtime.airport')}</label></div>
+        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot">${t('action.reboot')}</button></div>
       </form>
     </section>`;
 }
@@ -1134,20 +1088,20 @@ function renderModel() {
   const vbindValue = configValue('vbind', modelDefaults.vbind);
   const modelMatchEnabled = configValue('modelid', modelDefaults.modelid) !== 255;
   const uidPreview = bindingUidPreview();
-  const uidType = state.bindingPhrase.trim().length === 0 ? (c.uidtype || state.originalUidType || 'unknown') : 'Modified';
+  const uidType = state.bindingPhrase.trim().length === 0 ? (c.uidtype || state.originalUidType || t('value.unknown')) : t('value.modified');
   return `
     <section class="panel">
-      <h2>Model</h2>
+      <h2>${t('model.heading')}</h2>
       <form id="model-form">
-        <div class="row"><label for="vbind">Binding storage</label><select id="vbind" name="vbind">${bindStorage.map(([value, label]) => `<option value="${value}" ${selected(vbindValue, value)}>${label}</option>`).join('')}</select></div>
-        <div class="row" id="bindphrase-row" style="display:${vbindValue === 1 ? 'none' : 'grid'};"><label for="phrase">Binding Phrase</label><input id="phrase" name="phrase" value="${escapeHtml(state.bindingPhrase)}" placeholder="Binding Phrase"><div class="helper">The binding phrase is not remembered. It is only used to generate the UID bytes below.</div></div>
-        <div class="row" id="uid-row" style="display:${vbindValue === 1 ? 'none' : 'grid'};"><label for="uid-preview">Generated UID bytes</label><input id="uid-preview" name="uid-preview" value="${escapeHtml(listToPrettyString(uidPreview))}" readonly><div class="badge-row"><span id="uid-type" class="badge">${escapeHtml(uidType)}</span></div></div>
-        <div class="check"><input id="model-match" name="model-match" type="checkbox" ${checked(modelMatchEnabled)}><label for="model-match">Enable Model Match</label></div>
-        <div class="row" id="modelid-row" style="display:${modelMatchEnabled ? 'grid' : 'none'};"><label for="modelid">Model ID</label><input id="modelid" name="modelid" value="${escapeHtml(configValue('modelid', modelDefaults.modelid))}" inputmode="numeric"></div>
-        <div class="row"><label for="serial-protocol">Serial Protocol</label><select id="serial-protocol" name="serial-protocol">${serialProtocols.map(([value, label]) => `<option value="${value}" ${selected(configValue('serial-protocol', modelDefaults['serial-protocol']), value)}>${label}</option>`).join('')}</select></div>
-        <div class="row"><label for="sbus-failsafe">SBUS Failsafe</label><select id="sbus-failsafe" name="sbus-failsafe"><option value="0" ${selected(configValue('sbus-failsafe', modelDefaults['sbus-failsafe']), 0)}>No Pulses</option><option value="1" ${selected(configValue('sbus-failsafe', modelDefaults['sbus-failsafe']), 1)}>Last Position</option></select></div>
-        <div class="check"><input id="force-tlm" name="force-tlm" type="checkbox" ${checked(configValue('force-tlm', modelDefaults['force-tlm']))}><label for="force-tlm">Force telemetry off</label></div>
-        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>Save</button><button class="danger" type="button" data-action="reset-model">Reset Model</button></div>
+        <div class="row"><label for="vbind">${t('model.bindStorage')}</label><select id="vbind" name="vbind">${bindStorage.map(([value, getLabel]) => `<option value="${value}" ${selected(vbindValue, value)}>${getLabel()}</option>`).join('')}</select></div>
+        <div class="row" id="bindphrase-row" style="display:${vbindValue === 1 ? 'none' : 'grid'};"><label for="phrase">${t('model.bindingPhrase')}</label><input id="phrase" name="phrase" value="${escapeHtml(state.bindingPhrase)}" placeholder="${t('model.bindingPhrase')}"><div class="helper">${t('model.help.bindingPhrase')}</div></div>
+        <div class="row" id="uid-row" style="display:${vbindValue === 1 ? 'none' : 'grid'};"><label for="uid-preview">${t('model.generatedUid')}</label><input id="uid-preview" name="uid-preview" value="${escapeHtml(listToPrettyString(uidPreview))}" readonly><div class="badge-row"><span id="uid-type" class="badge">${escapeHtml(uidType)}</span></div></div>
+        <div class="check"><input id="model-match" name="model-match" type="checkbox" ${checked(modelMatchEnabled)}><label for="model-match">${t('model.enableModelMatch')}</label></div>
+        <div class="row" id="modelid-row" style="display:${modelMatchEnabled ? 'grid' : 'none'};"><label for="modelid">${t('model.modelId')}</label><input id="modelid" name="modelid" value="${escapeHtml(configValue('modelid', modelDefaults.modelid))}" inputmode="numeric"></div>
+        <div class="row"><label for="serial-protocol">${t('model.serialProtocol')}</label><select id="serial-protocol" name="serial-protocol">${serialProtocols.map(([value, label]) => `<option value="${value}" ${selected(configValue('serial-protocol', modelDefaults['serial-protocol']), value)}>${label}</option>`).join('')}</select></div>
+        <div class="row"><label for="sbus-failsafe">${t('model.sbusFailsafe')}</label><select id="sbus-failsafe" name="sbus-failsafe"><option value="0" ${selected(configValue('sbus-failsafe', modelDefaults['sbus-failsafe']), 0)}>${t('sbusFailsafe.noPulses')}</option><option value="1" ${selected(configValue('sbus-failsafe', modelDefaults['sbus-failsafe']), 1)}>${t('sbusFailsafe.lastPosition')}</option></select></div>
+        <div class="check"><input id="force-tlm" name="force-tlm" type="checkbox" ${checked(configValue('force-tlm', modelDefaults['force-tlm']))}><label for="force-tlm">${t('model.forceTelemetry')}</label></div>
+        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.save')}</button><button class="danger" type="button" data-action="reset-model">${t('action.resetModel')}</button></div>
       </form>
     </section>`;
 }
@@ -1158,35 +1112,35 @@ function renderPwm() {
   if (!entries.length) {
     return `
       <section class="panel">
-        <h2>PWM</h2>
-        <div class="notice">This target does not expose PWM outputs through <code>/config</code>.</div>
+        <h2>${t('pwm.headingShort')}</h2>
+        <div class="notice">${t('pwm.noPwmNotice')}</div>
       </section>`;
   }
 
   const serial2Visible = pwmSerial2Active();
   return `
     <section class="panel">
-      <h2>PWM Output</h2>
-      ${offline ? `<div class="notice">Not connected to a device. Showing offline preview with default values.</div>` : ''}
+      <h2>${t('pwm.heading')}</h2>
+      ${offline ? `<div class="notice">${t('pwm.offlineNotice')}</div>` : ''}
       <div class="helper pwm-help">
-        Configure each receiver output pin mode, source channel, inversion, pulse width and failsafe. <code>Invert</code> mirrors the control value around <code>1500us</code>. <code>Polarity</code> stores the raw signal-polarity flag; whether it has an effect depends on the current platform and output mode. Modes above <code>Serial RX/TX</code> are exclusive and can only be assigned once.
+        ${t('pwm.help.general')}
       </div>
       <form id="pwm-form">
         <div class="table-shell">
           <table class="grid-table pwm-table">
             <thead>
               <tr>
-                <th>Output</th>
-                <th>Pin</th>
-                <th>Features</th>
-                <th>Mode</th>
-                <th>Source</th>
-                <th>Input</th>
-                <th>Invert</th>
-                <th>PolarityInvert</th>
-                <th>750us</th>
-                <th>Failsafe</th>
-                <th>Position</th>
+                <th>${t('pwm.output')}</th>
+                <th>${t('pwm.pin')}</th>
+                <th>${t('pwm.features')}</th>
+                <th>${t('pwm.mode')}</th>
+                <th>${t('pwm.source')}</th>
+                <th>${t('pwm.input')}</th>
+                <th>${t('pwm.invert')}</th>
+                <th>${t('pwm.polarityInvert')}</th>
+                <th>${t('pwm.narrow')}</th>
+                <th>${t('pwm.failsafe')}</th>
+                <th>${t('pwm.position')}</th>
               </tr>
             </thead>
             <tbody>
@@ -1200,12 +1154,12 @@ function renderPwm() {
                     <td>${escapeHtml(entry.pin)}</td>
                     <td><div class="badge-row pwm-badges">${pwmFeatureBadges(entry.features)}</div></td>
                     <td><select name="pwm-mode-${index}" data-pwm-mode="${index}">${renderPwmModeOptions(entry.features, decoded.mode)}</select></td>
-                    <td><select name="pwm-source-${index}" data-pwm-dependent="${index}"><option value="0" ${selected(decoded.mixerMode ? 1 : 0, 0)}>RC</option><option value="1" ${selected(decoded.mixerMode ? 1 : 0, 1)}>Mixer</option></select></td>
+                    <td><select name="pwm-source-${index}" data-pwm-dependent="${index}"><option value="0" ${selected(decoded.mixerMode ? 1 : 0, 0)}>${t('pwm.sourceRc')}</option><option value="1" ${selected(decoded.mixerMode ? 1 : 0, 1)}>${t('pwm.sourceMixer')}</option></select></td>
                     <td><select name="pwm-input-${index}" data-pwm-dependent="${index}">${pwmInputLabels.map((label, value) => `<option value="${value}" ${selected(decoded.inputChannel, value)}>${label}</option>`).join('')}</select></td>
                     <td><input name="pwm-invert-${index}" type="checkbox" data-pwm-dependent="${index}" ${checked(decoded.inverted)} ${disabled(disabledRow)}></td>
                     <td><input name="pwm-polarity-${index}" type="checkbox" data-pwm-polarity="${index}" ${checked(decoded.signalPolarityInverted)}></td>
                     <td><input name="pwm-narrow-${index}" type="checkbox" data-pwm-dependent="${index}" ${checked(decoded.narrow)} ${disabled(disabledRow)}></td>
-                    <td><select name="pwm-failsafe-mode-${index}" data-pwm-failsafe-mode="${index}" data-pwm-dependent="${index}" ${disabled(disabledRow)}>${pwmFailsafeModes.map((label, value) => `<option value="${value}" ${selected(decoded.failsafeMode, value)}>${label}</option>`).join('')}</select></td>
+                    <td><select name="pwm-failsafe-mode-${index}" data-pwm-failsafe-mode="${index}" data-pwm-dependent="${index}" ${disabled(disabledRow)}>${pwmFailsafeModes.map((getLabel, value) => `<option value="${value}" ${selected(decoded.failsafeMode, value)}>${getLabel()}</option>`).join('')}</select></td>
                     <td><input name="pwm-failsafe-${index}" type="number" min="988" max="2011" value="${escapeHtml(decoded.failsafe)}" data-pwm-failsafe="${index}" data-pwm-dependent="${index}" ${disabled(failsafeDisabled)}></td>
                   </tr>`;
               }).join('')}
@@ -1213,11 +1167,11 @@ function renderPwm() {
           </table>
         </div>
         <div class="row" id="serial1-config-row" style="display:${serial2Visible ? 'grid' : 'none'};">
-          <label for="serial1-protocol">Serial2 Protocol</label>
+          <label for="serial1-protocol">${t('pwm.serial2Protocol')}</label>
           <select id="serial1-protocol" name="serial1-protocol">${serial1Protocols.map(([value, label]) => `<option value="${value}" ${selected(configValue('serial1-protocol', 0), value)}>${label}</option>`).join('')}</select>
-          <div class="helper">Shown when any output is assigned to <code>Serial2 TX</code>.</div>
+          <div class="helper">${t('pwm.help.serial2')}</div>
         </div>
-        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>Save</button><button class="secondary" type="button" data-action="refresh">Refresh</button></div>
+        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="refresh">${t('action.refresh')}</button></div>
       </form>
     </section>`;
 }
@@ -1323,48 +1277,48 @@ function renderFlight() {
   ].join('\n');
   return `
     <section class="panel">
-      <h2>Flight Control</h2>
+      <h2>${t('flight.heading')}</h2>
       <form id="flight-form">
-        <div class="check"><input id="fc_angle_enabled" name="fc_angle_enabled" type="checkbox" ${checked(angleEnabled)}><label for="fc_angle_enabled">Angle loop enabled</label></div>
-        <div class="check"><input id="fc_arm_enabled" name="fc_arm_enabled" type="checkbox" ${checked(armEnabled)}><label for="fc_arm_enabled">CH5 motor arm enabled</label></div>
-        <div class="notice">Rate loop is always active. Angle loop only applies when this switch is on.</div>
+        <div class="check"><input id="fc_angle_enabled" name="fc_angle_enabled" type="checkbox" ${checked(angleEnabled)}><label for="fc_angle_enabled">${t('flight.angleEnabled')}</label></div>
+        <div class="check"><input id="fc_arm_enabled" name="fc_arm_enabled" type="checkbox" ${checked(armEnabled)}><label for="fc_arm_enabled">${t('flight.armEnabled')}</label></div>
+        <div class="notice">${t('notice.rateLoop')}</div>
         <div class="row">
-          <label>Rate PID</label>
-          ${renderNumGrid('fc_rate_pid', ['Roll', 'Pitch', 'Yaw'], ['Kp', 'Ki', 'Kd', 'I limit'], ratePid, {rowHeader: 'Axis'})}
+          <label>${t('flight.ratePid')}</label>
+          ${renderNumGrid('fc_rate_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], ratePid, {rowHeader: t('flight.axis')})}
         </div>
         <div class="row" id="angle-pid-row" style="display:${angleEnabled ? 'grid' : 'none'};">
-          <label>Angle PID</label>
-          ${renderNumGrid('fc_angle_pid', ['Roll', 'Pitch', 'Yaw'], ['Kp', 'Ki', 'Kd', 'I limit'], anglePid, {rowHeader: 'Axis', disabled: !angleEnabled})}
+          <label>${t('flight.anglePid')}</label>
+          ${renderNumGrid('fc_angle_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], anglePid, {rowHeader: t('flight.axis'), disabled: !angleEnabled})}
         </div>
         <div class="row">
-          <label>Mixer</label>
-          ${renderNumGrid('fc_mixer', Array.from({length: motors}, (_, i) => `Motor ${i + 1}`), ['Throttle', 'Roll', 'Pitch', 'Yaw'], mixer, {rowHeader: 'Motor'})}
-          <div class="helper">${motors} motor${motors !== 1 ? 's' : ''}</div>
+          <label>${t('flight.mixer')}</label>
+          ${renderNumGrid('fc_mixer', Array.from({length: motors}, (_, i) => `${t('flight.motor')} ${i + 1}`), [t('flight.throttle'), t('flight.roll'), t('flight.pitch'), t('flight.yaw')], mixer, {rowHeader: t('flight.motor')})}
+          <div class="helper">${motors} ${motors !== 1 ? t('flight.motors') : t('flight.motor')}</div>
           <div class="actions">
-            <button class="secondary" type="button" data-action="add-motor" ${state.busy ? 'disabled' : ''}>Add Motor</button>
-            <button class="secondary" type="button" data-action="remove-motor" ${state.busy || state.extraMixerRows <= 0 ? 'disabled' : ''}>Remove Motor</button>
+            <button class="secondary" type="button" data-action="add-motor" ${state.busy ? 'disabled' : ''}>${t('action.addMotor')}</button>
+            <button class="secondary" type="button" data-action="remove-motor" ${state.busy || state.extraMixerRows <= 0 ? 'disabled' : ''}>${t('action.removeMotor')}</button>
           </div>
         </div>
         <div class="row">
-          <label>Board Orientation</label>
+          <label>${t('flight.boardOrientation')}</label>
           <div class="orientation-editor">
             <div class="euler-controls">
               <div class="euler-field">
-                <label for="euler-roll">Roll <span class="axis-tag">X</span></label>
+                <label for="euler-roll">${t('flight.roll')} <span class="axis-tag">X</span></label>
                 <div class="euler-input-row">
                   <input type="range" id="euler-roll-slider" data-euler="roll" class="euler-slider" min="-180" max="180" value="${roll}">
                   <input type="number" id="euler-roll" data-euler="roll" class="euler-number" value="${roll}" step="1" min="-180" max="180">
                 </div>
               </div>
               <div class="euler-field">
-                <label for="euler-pitch">Pitch <span class="axis-tag">Y</span></label>
+                <label for="euler-pitch">${t('flight.pitch')} <span class="axis-tag">Y</span></label>
                 <div class="euler-input-row">
                   <input type="range" id="euler-pitch-slider" data-euler="pitch" class="euler-slider" min="-180" max="180" value="${pitch}">
                   <input type="number" id="euler-pitch" data-euler="pitch" class="euler-number" value="${pitch}" step="1" min="-180" max="180">
                 </div>
               </div>
               <div class="euler-field">
-                <label for="euler-yaw">Yaw <span class="axis-tag">Z</span></label>
+                <label for="euler-yaw">${t('flight.yaw')} <span class="axis-tag">Z</span></label>
                 <div class="euler-input-row">
                   <input type="range" id="euler-yaw-slider" data-euler="yaw" class="euler-slider" min="-180" max="180" value="${yaw}">
                   <input type="number" id="euler-yaw" data-euler="yaw" class="euler-number" value="${yaw}" step="1" min="-180" max="180">
@@ -1376,7 +1330,7 @@ function renderFlight() {
                 <div class="preview-board" id="board-preview" style="transform:${boardPreviewTransform(roll, pitch, yaw)}">
                   <div class="board-top">
                     <div class="board-chip">▲</div>
-                    <div class="board-label">FW</div>
+                    <div class="board-label">${t('flight.boardLabel')}</div>
                   </div>
                 </div>
               </div>
@@ -1388,7 +1342,7 @@ function renderFlight() {
             </div>
           </div>
         </div>
-        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>Save</button><button class="secondary" type="button" data-action="reboot">Reboot</button></div>
+        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot">${t('action.reboot')}</button></div>
       </form>
     </section>`;
 }
@@ -1400,9 +1354,9 @@ function renderDebug() {
   return `
     <div class="grid">
       <section class="panel">
-        <h2>MSP Debug Polling</h2>
+        <h2>${t('debug.headingPolling')}</h2>
         <div class="row">
-          <label for="debug-poll-rate">Poll Rate</label>
+          <label for="debug-poll-rate">${t('debug.pollRate')}</label>
           <select id="debug-poll-rate">
             <option value="10" ${selected(state.debugPollRateHz, 10)}>10 Hz</option>
             <option value="20" ${selected(state.debugPollRateHz, 20)}>20 Hz</option>
@@ -1410,25 +1364,25 @@ function renderDebug() {
           </select>
         </div>
         <div class="actions">
-          <button class="primary" type="button" data-action="debug-start" ${state.debugPolling ? 'disabled' : ''}>Start Polling</button>
-          <button class="secondary" type="button" data-action="debug-stop" ${state.debugPolling ? '' : 'disabled'}>Stop</button>
+          <button class="primary" type="button" data-action="debug-start" ${state.debugPolling ? 'disabled' : ''}>${t('action.startPolling')}</button>
+          <button class="secondary" type="button" data-action="debug-stop" ${state.debugPolling ? '' : 'disabled'}>${t('action.stop')}</button>
         </div>
         <div id="debug-error" class="notice" style="display:${state.debugError ? 'block' : 'none'}">${escapeHtml(state.debugError)}</div>
-        <div class="helper">Uses MSP v2 command <code>MSP_ELRS_FC_DEBUG</code> on TCP port 5761. Native TCP polling requires the Tauri app shell.</div>
+        <div class="helper">${t('debug.help.polling')}</div>
       </section>
       <section class="panel">
-        <h2>Attitude</h2>
-        <div class="metric"><span>Roll</span><strong id="debug-roll">${formatDebugValue(sample?.roll_deg, 2, ' deg')}</strong></div>
-        <div class="metric"><span>Pitch</span><strong id="debug-pitch">${formatDebugValue(sample?.pitch_deg, 2, ' deg')}</strong></div>
-        <div class="metric"><span>Yaw</span><strong id="debug-yaw">${formatDebugValue(sample?.yaw_deg, 2, ' deg')}</strong></div>
-        <div class="metric"><span>Accel Roll Ref</span><strong id="debug-accel-roll">${formatDebugValue(sample?.accel_roll_deg, 2, ' deg')}</strong></div>
-        <div class="metric"><span>Accel Pitch Ref</span><strong id="debug-accel-pitch">${formatDebugValue(sample?.accel_pitch_deg, 2, ' deg')}</strong></div>
-        <div class="metric"><span>Roll/Pitch Error</span><strong id="debug-error-angle">${formatDebugValue(attitudeErrorRoll, 2, ' deg')} / ${formatDebugValue(attitudeErrorPitch, 2, ' deg')}</strong></div>
+        <h2>${t('debug.headingAttitude')}</h2>
+        <div class="metric"><span>${t('flight.roll')}</span><strong id="debug-roll">${formatDebugValue(sample?.roll_deg, 2, ' deg')}</strong></div>
+        <div class="metric"><span>${t('flight.pitch')}</span><strong id="debug-pitch">${formatDebugValue(sample?.pitch_deg, 2, ' deg')}</strong></div>
+        <div class="metric"><span>${t('flight.yaw')}</span><strong id="debug-yaw">${formatDebugValue(sample?.yaw_deg, 2, ' deg')}</strong></div>
+        <div class="metric"><span>${t('debug.accelRollRef')}</span><strong id="debug-accel-roll">${formatDebugValue(sample?.accel_roll_deg, 2, ' deg')}</strong></div>
+        <div class="metric"><span>${t('debug.accelPitchRef')}</span><strong id="debug-accel-pitch">${formatDebugValue(sample?.accel_pitch_deg, 2, ' deg')}</strong></div>
+        <div class="metric"><span>${t('debug.rollPitchError')}</span><strong id="debug-error-angle">${formatDebugValue(attitudeErrorRoll, 2, ' deg')} / ${formatDebugValue(attitudeErrorPitch, 2, ' deg')}</strong></div>
       </section>
       <section class="panel debug-aircraft-panel">
-        <h2>Aircraft Attitude</h2>
+        <h2>${t('debug.headingAircraft')}</h2>
         <div id="debug-aircraft-wrapper" class="debug-aircraft-wrapper">
-          <canvas id="debug-aircraft-canvas" aria-label="3D aircraft attitude"></canvas>
+          <canvas id="debug-aircraft-canvas" aria-label="${t('debug.canvasLabel')}"></canvas>
         </div>
       </section>
     </div>`;
@@ -1459,10 +1413,10 @@ function updateDebugView() {
 function renderHardwareJson() {
   return `
     <section class="panel">
-      <h2>Hardware JSON</h2>
+      <h2>${t('hardware.heading')}</h2>
       <form id="hardware-form">
-        <div class="row"><label for="hardware_json">Hardware parameters</label><textarea class="json" id="hardware_json" name="hardware_json">${escapeHtml(jsonText(hardware()))}</textarea></div>
-        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>Save</button><button class="danger" type="button" data-action="reset-hardware">Reset Hardware</button></div>
+        <div class="row"><label for="hardware_json">${t('hardware.params')}</label><textarea class="json" id="hardware_json" name="hardware_json">${escapeHtml(jsonText(hardware()))}</textarea></div>
+        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.save')}</button><button class="danger" type="button" data-action="reset-hardware">${t('action.resetHardware')}</button></div>
       </form>
     </section>`;
 }
@@ -1472,16 +1426,16 @@ function renderWifi() {
   return `
     <div class="grid">
       <section class="panel">
-        <h2>Home Network</h2>
+        <h2>${t('wifi.homeNetwork')}</h2>
         <form id="wifi-form">
-          <div class="row"><label for="network">SSID</label><input id="network" name="network" list="networks"><datalist id="networks">${networkOptions}</datalist></div>
-          <div class="row"><label for="password">Password</label><input id="password" name="password" type="password"></div>
-          <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>Save & Connect</button><button class="secondary" type="button" data-action="scan">Scan</button></div>
+          <div class="row"><label for="network">${t('wifi.ssid')}</label><input id="network" name="network" list="networks"><datalist id="networks">${networkOptions}</datalist></div>
+          <div class="row"><label for="password">${t('wifi.password')}</label><input id="password" name="password" type="password"></div>
+          <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.saveConnect')}</button><button class="secondary" type="button" data-action="scan">${t('action.scan')}</button></div>
         </form>
       </section>
       <section class="panel">
-        <h2>WiFi Mode</h2>
-        <div class="actions"><button class="secondary" type="button" data-action="connect">Connect Home</button><button class="secondary" type="button" data-action="access-point">Access Point</button><button class="danger" type="button" data-action="forget">Forget Home</button></div>
+        <h2>${t('wifi.wifiMode')}</h2>
+        <div class="actions"><button class="secondary" type="button" data-action="connect">${t('action.connectHome')}</button><button class="secondary" type="button" data-action="access-point">${t('action.accessPoint')}</button><button class="danger" type="button" data-action="forget">${t('action.forget')}</button></div>
       </section>
     </div>`;
 }
@@ -1491,17 +1445,17 @@ function renderUpdate() {
   const mismatch = state.uploadResult?.status === 'mismatch';
   const uploadProgress = state.uploadProgress;
   const uploadError = state.uploadResult && state.uploadResult.status !== 'ok'
-    ? `<div class="notice">${escapeHtml(state.uploadResult.msg || `Firmware update failed (${state.uploadResult.status || 'unknown'})`)}</div>`
+    ? `<div class="notice">${escapeHtml(state.uploadResult.msg || t('update.failed', {status: state.uploadResult.status || t('value.unknown')}))}</div>`
     : '';
   const progressPercent = uploadProgress?.total ? Math.max(0, Math.min(100, Math.round((uploadProgress.loaded / uploadProgress.total) * 100))) : 0;
   return `
     <section class="panel">
-      <h2>Firmware Update</h2>
+      <h2>${t('update.heading')}</h2>
       ${uploadError}
       <form id="update-form">
-        <div class="row"><label for="firmware">Firmware file</label><input id="firmware" name="firmware" type="file"></div>
+        <div class="row"><label for="firmware">${t('update.firmwareFile')}</label><input id="firmware" name="firmware" type="file"></div>
         ${uploadProgress ? `<div class="upload-progress"><div class="upload-progress-meta"><span>${escapeHtml(uploadProgress.phase)}</span><strong>${progressPercent}%</strong></div><div class="upload-progress-bar"><span style="width:${progressPercent}%"></span></div></div>` : ''}
-        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>Upload</button><a class="secondary button-link" href="${firmwareHref}">Download Current Firmware</a>${mismatch ? '<button class="danger" type="button" data-action="force-confirm">Flash Anyway</button><button class="secondary" type="button" data-action="force-cancel">Cancel</button>' : ''}</div>
+        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.upload')}</button><a class="secondary button-link" href="${firmwareHref}">${t('action.download')}</a>${mismatch ? `<button class="danger" type="button" data-action="force-confirm">${t('action.flashAnyway')}</button><button class="secondary" type="button" data-action="force-cancel">${t('action.cancel')}</button>` : ''}</div>
       </form>
     </section>`;
 }
@@ -1703,23 +1657,27 @@ function render() {
   document.querySelector('#app').innerHTML = `
     <div class="app">
       <header class="topbar">
-        <div class="brand"><h1>Gyro ELRS Configurator</h1><span>Local RX Web UI parity</span></div>
+        <div class="brand"><h1>${t('app.title')}</h1><span>${t('app.subtitle')}</span></div>
+        <select class="lang-switch" aria-label="${t('lang.label')}">
+          <option value="zh-CN" ${selected(getLocale(), 'zh-CN')}>${t('lang.chinese')}</option>
+          <option value="en" ${selected(getLocale(), 'en')}>${t('lang.english')}</option>
+        </select>
         <form class="connection" id="connect-form">
           <input name="api" value="${escapeHtml(state.apiBase)}" aria-label="API base URL">
-          <button class="primary" ${state.busy ? 'disabled' : ''}>Connect</button>
-          <button class="secondary" type="button" data-action="refresh" ${state.busy ? 'disabled' : ''}>Refresh</button>
+          <button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.connect')}</button>
+          <button class="secondary" type="button" data-action="refresh" ${state.busy ? 'disabled' : ''}>${t('action.refresh')}</button>
         </form>
       </header>
       <div class="status">
         <div class="metric"><span>API</span><strong>${escapeHtml(state.apiBase)}</strong></div>
-        <div class="metric"><span>Type</span><strong>${escapeHtml(state.target?.['module-type'] || 'RX')}</strong></div>
-        <div class="metric"><span>Radio</span><strong>${escapeHtml(state.target?.['radio-type'] || 'unknown')}</strong></div>
+        <div class="metric"><span>${t('status.target')}</span><strong>${escapeHtml(state.target?.['module-type'] || 'RX')}</strong></div>
+        <div class="metric"><span>${t('status.rx')}</span><strong>${escapeHtml(state.target?.['radio-type'] || t('value.unknown'))}</strong></div>
       </div>
       <div class="shell">
-        <nav class="nav">${tabs.map(([id, label]) => `<button type="button" data-tab="${id}" class="${state.tab === id ? 'active' : ''}">${label}</button>`).join('')}</nav>
+        <nav class="nav">${tabs.map(([id, getLabel]) => `<button type="button" data-tab="${id}" class="${state.tab === id ? 'active' : ''}">${getLabel()}</button>`).join('')}</nav>
         <main class="content">
           ${state.message ? `<div class="message ${state.message.type}">${escapeHtml(state.message.text)}</div>` : ''}
-          ${state.busy ? '<div class="notice">Working...</div>' : ''}
+          ${state.busy ? `<div class="notice">${t('notice.working')}</div>` : ''}
           ${renderCurrentTab()}
         </main>
       </div>
@@ -1728,11 +1686,17 @@ function render() {
 }
 
 function wireEvents() {
+  document.querySelector('.lang-switch')?.addEventListener('change', (event) => {
+    setLocale(event.target.value);
+    document.title = t('app.title');
+    render();
+  });
+
   document.querySelector('#connect-form')?.addEventListener('submit', (event) => {
     event.preventDefault();
     state.apiBase = normalizeApiBase(new FormData(event.currentTarget).get('api'));
     localStorage.setItem(API_STORAGE_KEY, state.apiBase);
-    runBusy(loadDevice, 'Connected');
+    runBusy(loadDevice, t('message.connected'));
   });
 
   document.querySelectorAll('[data-tab]').forEach((button) => {
@@ -1808,14 +1772,14 @@ function wireEvents() {
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => {
       const action = button.dataset.action;
-      if (action === 'refresh') runBusy(loadDevice, 'Refreshed');
-      if (action === 'reboot') postPlain('/reboot', 'Reboot requested');
-      if (action === 'reset-model') postPlain('/reset?model', 'Model settings reset');
-      if (action === 'reset-hardware') postPlain('/reset?hardware', 'Hardware settings reset');
+      if (action === 'refresh') runBusy(loadDevice, t('message.refreshed'));
+      if (action === 'reboot') postPlain('/reboot', t('message.rebootRequested'));
+      if (action === 'reset-model') postPlain('/reset?model', t('message.modelReset'));
+      if (action === 'reset-hardware') postPlain('/reset?hardware', t('message.hardwareReset'));
       if (action === 'scan') scanNetworks();
-      if (action === 'connect') postPlain('/connect', 'Device is connecting to the home network');
-      if (action === 'access-point') postPlain('/access', 'Device is switching to access point mode');
-      if (action === 'forget') postPlain('/forget', 'Home network forgotten');
+      if (action === 'connect') postPlain('/connect', t('message.connectingHome'));
+      if (action === 'access-point') postPlain('/access', t('message.switchingAp'));
+      if (action === 'forget') postPlain('/forget', t('message.networkForgotten'));
       if (action === 'add-motor') { state.extraMixerRows = (state.extraMixerRows || 0) + 1; render(); }
       if (action === 'remove-motor') { state.extraMixerRows = Math.max(0, (state.extraMixerRows || 0) - 1); render(); }
       if (action === 'quick-orientation') quickOrientationStep();
@@ -1827,5 +1791,6 @@ function wireEvents() {
   });
 }
 
+document.title = t('app.title');
 render();
-runBusy(loadDevice, 'Connected');
+runBusy(loadDevice, t('message.connected'));
