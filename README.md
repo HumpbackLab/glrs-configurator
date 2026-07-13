@@ -60,7 +60,7 @@ npm run tauri build    # 生产构建
 | **Runtime** | WiFi 自动开启间隔、UART 波特率、首次连接锁定、AirPort 模式 |
 | **Model** | 绑定存储方式、绑定短语 → UID 生成、Model Match、串口协议、SBUS 故障保护 |
 | **PWM** | 每个输出引脚的模式、输入通道、反相、脉冲宽度、故障保护配置 |
-| **Flight** | 速率/角度 PID、混控器矩阵、板载方向 (欧拉角 + 3D 预览) |
+| **Flight** | 速率/角度 PID、CH5 电机解锁、混控器矩阵、板载方向 (欧拉角 + 3D 预览) |
 | **Debug** | MSP 调试轮询 (需 Tauri 环境)、姿态数据、3D 飞机姿态实时渲染 |
 | **Hardware JSON** | 硬件定义 JSON 编辑器 |
 | **WiFi** | 家庭网络扫描、连接、AP/STA 模式切换 |

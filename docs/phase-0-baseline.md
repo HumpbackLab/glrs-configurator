@@ -34,6 +34,7 @@
 - `fc_rate_pid`: 12 values, three axes by four PID columns.
 - `fc_angle_pid`: 12 values, three axes by four PID columns.
 - `fc_angle_enabled`: boolean.
+- `fc_arm_enabled`: boolean, gates flight-control motor output with CH5/AUX1.
 - `fc_mixer`: rows of four values: throttle, roll, pitch, yaw.
 - `fc_mixer_count`: firmware-reported mixer value count.
 - `fc_orientation`: 9 values, row-major 3x3 matrix.
@@ -46,4 +47,3 @@
 - Foreground-only polling for the first release.
 - Reconnect behavior after Android network switching or captive-portal prompts.
 - Log/config export through Android share/save flows rather than fixed filesystem paths.
-

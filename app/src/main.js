@@ -17,7 +17,6 @@ const state = {
   originalUid: [],
   originalUidType: '',
   networks: [],
-  simChannels: Array(16).fill(1500),
   message: null,
   busy: false,
   uploadResult: null,
@@ -583,11 +582,6 @@ async function loadDevice() {
   state.configResponse = configResponse;
   state.hardware = hardwareResponse;
   state.runtimeStatus = runtimeStatus;
-  // Load simulated channels for WiFi mode
-  apiFetch('/channels').then((r) => {
-    if (r?.channels) state.simChannels = r.channels;
-    render();
-  }).catch(() => {});
   state.extraMixerRows = 0;
   state.originalUid = bytesToList(configResponse?.config?.uid);
   state.originalUidType = configResponse?.config?.uidtype || '';
@@ -700,6 +694,7 @@ async function saveFlight(event) {
   const nextConfig = {...config()};
   await runBusy(async () => {
     nextConfig.fc_angle_enabled = form.fc_angle_enabled.checked;
+    nextConfig.fc_arm_enabled = form.fc_arm_enabled.checked;
     nextConfig.fc_rate_pid = readNumGrid(form, 'fc_rate_pid', 3, 4);
     nextConfig.fc_angle_pid = readNumGrid(form, 'fc_angle_pid', 3, 4);
     nextConfig.fc_mixer = readNumGrid(form, 'fc_mixer', motorCount(), 4);
@@ -1079,6 +1074,7 @@ function renderStatus() {
         <div class="metric"><span>Model ID</span><strong>${escapeHtml(c.modelid ?? '255')}</strong></div>
         <div class="metric"><span>Serial Protocol</span><strong>${escapeHtml(serialProtocols.find(([v]) => v === String(c['serial-protocol']))?.[1] || c['serial-protocol'] || 'CRSF')}</strong></div>
         <div class="metric"><span>Flight Angle Loop</span><strong>${configValue('fc_angle_enabled', false) ? 'Enabled' : 'Disabled'}</strong></div>
+        <div class="metric"><span>CH5 Motor Arm</span><strong>${configValue('fc_arm_enabled', false) ? 'Enabled' : 'Disabled'}</strong></div>
       </section>
       <section class="panel">
         <h2>Sensors</h2>
@@ -1223,19 +1219,6 @@ function renderPwm() {
         </div>
         <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>Save</button><button class="secondary" type="button" data-action="refresh">Refresh</button></div>
       </form>
-      <details class="channel-sim-details">
-        <summary>RC Channel Simulator</summary>
-        <div class="helper" style="margin-top:8px">Drag sliders to simulate RC values (988–2012µs) for PWM passthrough in WiFi mode.</div>
-        <div id="channel-sliders" class="channel-grid" style="margin-top:8px">
-          ${[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15].map(i => `
-            <div class="ch-cell">
-              <span class="ch-label">CH${i+1}</span>
-              <input type="range" min="988" max="2012" value="${state.simChannels[i] || 1500}" data-ch-slider="${i}">
-              <span class="ch-value">${state.simChannels[i] || 1500}</span>
-            </div>
-          `).join('')}
-        </div>
-      </details>
     </section>`;
 }
 
@@ -1328,6 +1311,7 @@ function renderFlight() {
   const anglePid = configValue('fc_angle_pid', []);
   const mixer = configValue('fc_mixer', []);
   const angleEnabled = configValue('fc_angle_enabled', false);
+  const armEnabled = configValue('fc_arm_enabled', false);
   const roll = state.eulerRoll ?? 0;
   const pitch = state.eulerPitch ?? 0;
   const yaw = state.eulerYaw ?? 0;
@@ -1342,6 +1326,7 @@ function renderFlight() {
       <h2>Flight Control</h2>
       <form id="flight-form">
         <div class="check"><input id="fc_angle_enabled" name="fc_angle_enabled" type="checkbox" ${checked(angleEnabled)}><label for="fc_angle_enabled">Angle loop enabled</label></div>
+        <div class="check"><input id="fc_arm_enabled" name="fc_arm_enabled" type="checkbox" ${checked(armEnabled)}><label for="fc_arm_enabled">CH5 motor arm enabled</label></div>
         <div class="notice">Rate loop is always active. Angle loop only applies when this switch is on.</div>
         <div class="row">
           <label>Rate PID</label>
@@ -1575,29 +1560,6 @@ function wireOrientationPreview() {
       const slider = document.querySelector(`[data-euler="${axis}"].euler-slider`);
       if (slider) slider.value = numInput.value;
       sync();
-    });
-  });
-}
-
-function wireChannelSliders() {
-  const container = document.querySelector('#channel-sliders');
-  if (!container) return;
-  let updateTimer = null;
-  const sendChannels = () => {
-    const channels = state.simChannels.map(v => v || 1500);
-    apiFetch('/channels', {method: 'POST', body: JSON.stringify({channels})}).catch(() => {});
-  };
-  container.querySelectorAll('input[data-ch-slider]').forEach(slider => {
-    slider.addEventListener('input', () => {
-      const i = parseInt(slider.dataset.chSlider);
-      const val = parseInt(slider.value);
-      state.simChannels[i] = val;
-      const cell = slider.closest('.ch-cell');
-      if (cell) {
-        cell.querySelector('.ch-value').textContent = val;
-      }
-      clearTimeout(updateTimer);
-      updateTimer = setTimeout(sendChannels, 100); // debounce
     });
   });
 }
@@ -1841,7 +1803,6 @@ function wireEvents() {
   syncBindingPreview();
   wireOrientationPreview();
   wirePwmForm();
-  wireChannelSliders();
   initDebugAircraftView();
 
   document.querySelectorAll('[data-action]').forEach((button) => {
