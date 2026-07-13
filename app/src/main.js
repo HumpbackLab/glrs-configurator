@@ -146,6 +146,10 @@ function normalizeApiBase(value) {
   return withScheme.replace(/\/+$/, '');
 }
 
+function apiBaseHost() {
+  return state.apiBase.replace(/^https?:\/\//i, '');
+}
+
 function loadApiBase() {
   const params = new URLSearchParams(window.location.search);
   const requested = params.get('api') || params.get('host');
@@ -1034,9 +1038,9 @@ function updateDebugAircraftAttitude(sample) {
     debugAircraftView?.render();
     return;
   }
-  debugAircraftView.model.rotation.x = sample.pitch_deg * -DEG_TO_RAD;
-  debugAircraftView.modelWrapper.rotation.y = sample.yaw_deg * -DEG_TO_RAD;
-  debugAircraftView.model.rotation.z = sample.roll_deg * -DEG_TO_RAD;
+  debugAircraftView.model.rotation.x = sample.roll_deg * DEG_TO_RAD;
+  debugAircraftView.modelWrapper.rotation.y = sample.yaw_deg * DEG_TO_RAD;
+  debugAircraftView.model.rotation.z = sample.pitch_deg * -DEG_TO_RAD;
   debugAircraftView.render();
 }
 
@@ -1663,13 +1667,13 @@ function render() {
           <option value="en" ${selected(getLocale(), 'en')}>${t('lang.english')}</option>
         </select>
         <form class="connection" id="connect-form">
-          <input name="api" value="${escapeHtml(state.apiBase)}" aria-label="API base URL">
+          <input name="api" value="${escapeHtml(apiBaseHost())}" aria-label="API base URL">
           <button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.connect')}</button>
           <button class="secondary" type="button" data-action="refresh" ${state.busy ? 'disabled' : ''}>${t('action.refresh')}</button>
         </form>
       </header>
       <div class="status">
-        <div class="metric"><span>API</span><strong>${escapeHtml(state.apiBase)}</strong></div>
+        <div class="metric"><span>API</span><strong>${escapeHtml(apiBaseHost())}</strong></div>
         <div class="metric"><span>${t('status.target')}</span><strong>${escapeHtml(state.target?.['module-type'] || 'RX')}</strong></div>
         <div class="metric"><span>${t('status.rx')}</span><strong>${escapeHtml(state.target?.['radio-type'] || t('value.unknown'))}</strong></div>
       </div>
