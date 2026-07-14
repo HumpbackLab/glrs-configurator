@@ -1,7 +1,6 @@
 {
   "app": {
-    "title": "Gyro ELRS 配置工具",
-    "subtitle": "本地 RX Web UI 同款功能"
+    "title": "Gyro ELRS 配置工具"
   },
   "tab": {
     "status": "状态",
@@ -129,9 +128,6 @@
     "accelRollRef": "加速度计 Roll 参考",
     "accelPitchRef": "加速度计 Pitch 参考",
     "rollPitchError": "Roll/Pitch 误差",
-    "help": {
-      "polling": "使用 MSP v2 命令 <code>MSP_ELRS_FC_DEBUG</code>，通过 TCP 端口 5761 轮询。原生 TCP 轮询需要 Tauri 应用环境。"
-    },
     "canvasLabel": "3D 飞行器姿态"
   },
   "hardware": {

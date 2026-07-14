@@ -1,7 +1,6 @@
 {
   "app": {
-    "title": "Gyro ELRS Configurator",
-    "subtitle": "Local RX Web UI parity"
+    "title": "Gyro ELRS Configurator"
   },
   "tab": {
     "status": "Status",
@@ -129,9 +128,6 @@
     "accelRollRef": "Accel Roll Ref",
     "accelPitchRef": "Accel Pitch Ref",
     "rollPitchError": "Roll/Pitch Error",
-    "help": {
-      "polling": "Uses MSP v2 command <code>MSP_ELRS_FC_DEBUG</code> on TCP port 5761. Native TCP polling requires the Tauri app shell."
-    },
     "canvasLabel": "3D aircraft attitude"
   },
   "hardware": {

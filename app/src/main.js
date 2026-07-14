@@ -501,6 +501,17 @@ function numCellValue(values, index) {
   return Number.isFinite(value) ? value : 0;
 }
 
+function renderNumGridRow(prefix, rowLabel, colCount, values, rowIndex, disabled = '') {
+  return `
+    <tr>
+      <th scope="row">${escapeHtml(rowLabel)}</th>
+      ${Array.from({length: colCount}, (_, colIndex) => {
+        const index = rowIndex * colCount + colIndex;
+        return `<td><input type="number" step="any" inputmode="decimal" data-grid="${prefix}" data-row="${rowIndex}" data-col="${colIndex}" value="${escapeHtml(numCellValue(values, index))}" ${disabled}></td>`;
+      }).join('')}
+    </tr>`;
+}
+
 function renderNumGrid(prefix, rowLabels, colLabels, values, options = {}) {
   const disabled = options.disabled ? 'disabled' : '';
   const note = options.note ? `<div class="helper">${escapeHtml(options.note)}</div>` : '';
@@ -514,14 +525,7 @@ function renderNumGrid(prefix, rowLabels, colLabels, values, options = {}) {
           </tr>
         </thead>
         <tbody>
-          ${rowLabels.map((rowLabel, rowIndex) => `
-            <tr>
-              <th scope="row">${escapeHtml(rowLabel)}</th>
-              ${colLabels.map((_, colIndex) => {
-                const index = rowIndex * colLabels.length + colIndex;
-                return `<td><input type="number" step="any" inputmode="decimal" data-grid="${prefix}" data-row="${rowIndex}" data-col="${colIndex}" value="${escapeHtml(numCellValue(values, index))}" ${disabled}></td>`;
-              }).join('')}
-            </tr>`).join('')}
+          ${rowLabels.map((rowLabel, rowIndex) => renderNumGridRow(prefix, rowLabel, colLabels.length, values, rowIndex, disabled)).join('')}
         </tbody>
       </table>
       ${note}
@@ -1066,7 +1070,7 @@ function renderStatus() {
       </section>
       <section class="panel">
         <h2>${t('status.sensors')}</h2>
-        <div class="metric"><span>${t('status.gyro')}</span><strong>${state.target?.['has-gyro'] ? t('value.detected') : t('value.notDetected')}</strong>${state.target?.['gyro-msg'] ? `<div class="diag-msg">${escapeHtml(state.target['gyro-msg']).replace(/\n/g, '<br>')}</div>` : ''}</div>
+        <div class="metric"><span>${t('status.gyro')}</span><strong>${state.target?.['has-gyro'] ? t('value.detected') : t('value.notDetected')}</strong></div>
         ${state.target?.['has-vbat'] ? `<div class="metric"><span>${t('status.vbat')}</span><strong>${(state.target['vbat-voltage'] * 0.01).toFixed(2)} V</strong></div>` : ''}
       </section>
     </div>`;
@@ -1187,6 +1191,35 @@ function motorCount() {
   return base + (state.extraMixerRows || 0);
 }
 
+function changeMixerRowCount(delta) {
+  const mixerInput = document.querySelector('#flight-form [data-grid="fc_mixer"]');
+  const tbody = mixerInput?.closest('tbody');
+  if (!tbody) return;
+
+  if (delta > 0) {
+    const rowIndex = motorCount();
+    state.extraMixerRows = (state.extraMixerRows || 0) + 1;
+    tbody.insertAdjacentHTML('beforeend', renderNumGridRow(
+      'fc_mixer',
+      `${t('flight.motor')} ${rowIndex + 1}`,
+      4,
+      [],
+      rowIndex,
+    ));
+  } else if (state.extraMixerRows > 0) {
+    tbody.lastElementChild?.remove();
+    state.extraMixerRows -= 1;
+  }
+
+  const motors = motorCount();
+  const countLabel = document.querySelector('#mixer-motor-count');
+  if (countLabel) {
+    countLabel.textContent = `${motors} ${motors !== 1 ? t('flight.motors') : t('flight.motor')}`;
+  }
+  const removeButton = document.querySelector('[data-action="remove-motor"]');
+  if (removeButton) removeButton.disabled = state.busy || state.extraMixerRows <= 0;
+}
+
 function rad(deg) { return deg * Math.PI / 180; }
 function deg(rad) { return rad * 180 / Math.PI; }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
@@ -1297,7 +1330,7 @@ function renderFlight() {
         <div class="row">
           <label>${t('flight.mixer')}</label>
           ${renderNumGrid('fc_mixer', Array.from({length: motors}, (_, i) => `${t('flight.motor')} ${i + 1}`), [t('flight.throttle'), t('flight.roll'), t('flight.pitch'), t('flight.yaw')], mixer, {rowHeader: t('flight.motor')})}
-          <div class="helper">${motors} ${motors !== 1 ? t('flight.motors') : t('flight.motor')}</div>
+          <div class="helper" id="mixer-motor-count">${motors} ${motors !== 1 ? t('flight.motors') : t('flight.motor')}</div>
           <div class="actions">
             <button class="secondary" type="button" data-action="add-motor" ${state.busy ? 'disabled' : ''}>${t('action.addMotor')}</button>
             <button class="secondary" type="button" data-action="remove-motor" ${state.busy || state.extraMixerRows <= 0 ? 'disabled' : ''}>${t('action.removeMotor')}</button>
@@ -1372,7 +1405,6 @@ function renderDebug() {
           <button class="secondary" type="button" data-action="debug-stop" ${state.debugPolling ? '' : 'disabled'}>${t('action.stop')}</button>
         </div>
         <div id="debug-error" class="notice" style="display:${state.debugError ? 'block' : 'none'}">${escapeHtml(state.debugError)}</div>
-        <div class="helper">${t('debug.help.polling')}</div>
       </section>
       <section class="panel">
         <h2>${t('debug.headingAttitude')}</h2>
@@ -1661,7 +1693,7 @@ function render() {
   document.querySelector('#app').innerHTML = `
     <div class="app">
       <header class="topbar">
-        <div class="brand"><h1>${t('app.title')}</h1><span>${t('app.subtitle')}</span></div>
+        <div class="brand"><h1>${t('app.title')}</h1></div>
         <select class="lang-switch" aria-label="${t('lang.label')}">
           <option value="zh-CN" ${selected(getLocale(), 'zh-CN')}>${t('lang.chinese')}</option>
           <option value="en" ${selected(getLocale(), 'en')}>${t('lang.english')}</option>
@@ -1784,8 +1816,8 @@ function wireEvents() {
       if (action === 'connect') postPlain('/connect', t('message.connectingHome'));
       if (action === 'access-point') postPlain('/access', t('message.switchingAp'));
       if (action === 'forget') postPlain('/forget', t('message.networkForgotten'));
-      if (action === 'add-motor') { state.extraMixerRows = (state.extraMixerRows || 0) + 1; render(); }
-      if (action === 'remove-motor') { state.extraMixerRows = Math.max(0, (state.extraMixerRows || 0) - 1); render(); }
+      if (action === 'add-motor') changeMixerRowCount(1);
+      if (action === 'remove-motor') changeMixerRowCount(-1);
       if (action === 'quick-orientation') quickOrientationStep();
       if (action === 'debug-start') startDebugPolling();
       if (action === 'debug-stop') stopDebugPolling();
