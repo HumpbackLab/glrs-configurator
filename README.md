@@ -46,7 +46,7 @@ npm run tauri build    # 生产构建
 
 ### 发布与应用自动更新
 
-发布 GitHub Release 后，`.github/workflows/release.yml` 会从 Release 标签构建对应版本，上传 Windows NSIS、Linux DEB/AppImage、更新签名和 `latest.json`。Release 标签必须使用 `vX.Y.Z` 或 `X.Y.Z` 格式。
+发布 GitHub Release 后，`.github/workflows/release.yml` 会从 Release 标签构建对应版本，上传 Windows NSIS、Linux DEB、更新签名和 `latest.json`。Release 标签必须使用 `vX.Y.Z` 或 `X.Y.Z` 格式。
 
 自动更新包使用 Tauri 签名密钥验证。发布前需要在 GitHub 仓库 Actions secrets 中配置：
 
@@ -54,6 +54,33 @@ npm run tauri build    # 生产构建
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：私钥密码；无密码密钥可留空
 
 私钥不得提交到仓库，且必须安全备份；丢失私钥后，已安装的应用将无法升级到使用新密钥签名的版本。
+
+配置器的更新页面允许选择 Gitee 或 GitHub 更新源。首次运行时，中文界面默认使用 Gitee，英文界面默认使用 GitHub；用户手动选择后会记住该设置。
+
+#### 同步 GitHub Release 到 Gitee
+
+`scripts/sync-github-release-to-gitee.sh` 可将指定 GitHub Release 的说明和全部附件同步到 Gitee。脚本依赖 `curl`、`jq` 和 `base64`，同名附件会被替换；`latest.json` 内的安装包地址会自动改写为 Gitee 下载地址。
+
+```bash
+export GITEE_TOKEN="你的 Gitee 私人令牌"
+./scripts/sync-github-release-to-gitee.sh \
+  HumpbackLab/glrs-configurator \
+  your-gitee-owner/glrs-configurator \
+  v0.1.0
+```
+
+如需为 Tauri 提供不随 tag 改变的更新地址，可同时将改写后的 `latest.json` 发布到 Gitee 仓库固定路径：
+
+```bash
+export GITEE_MANIFEST_BRANCH=master
+export GITEE_MANIFEST_PATH=updater/latest.json
+./scripts/sync-github-release-to-gitee.sh \
+  HumpbackLab/glrs-configurator \
+  your-gitee-owner/glrs-configurator \
+  latest
+```
+
+此时稳定地址为 `https://raw.giteeusercontent.com/your-gitee-owner/glrs-configurator/raw/master/updater/latest.json`。目标仓库必须是公开仓库，桌面客户端才能在不携带令牌的情况下检查和下载更新。
 
 ## 连接到设备
 

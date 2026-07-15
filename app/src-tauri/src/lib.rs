@@ -3,6 +3,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::sync::Mutex;
 use std::time::Duration;
+use tauri::Manager;
 
 const MSP_ELRS_FC_DEBUG: u16 = 0x0450;
 const MSP_DEBUG_PORT: u16 = 5761;
@@ -199,6 +200,111 @@ fn msp_debug_poll(state: tauri::State<MspDebugState>) -> Result<Option<FcDebugSa
     parse_debug_payload(&payload_and_crc[..payload_len]).map(Some)
 }
 
+#[cfg(desktop)]
+mod app_updates {
+    use serde::Serialize;
+    use std::sync::Mutex;
+    use tauri::{ipc::Channel, AppHandle, State};
+    use tauri_plugin_updater::{Update, UpdaterExt};
+
+    const GITHUB_ENDPOINT: &str =
+        "https://github.com/HumpbackLab/glrs-configurator/releases/latest/download/latest.json";
+    const GITEE_ENDPOINT: &str =
+        "https://raw.giteeusercontent.com/ncer/glrs-configurator/raw/master/updater/latest.json";
+
+    pub struct PendingUpdate(pub Mutex<Option<Update>>);
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct UpdateMetadata {
+        version: String,
+        notes: Option<String>,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct UpdateCheckResult {
+        current_version: String,
+        update: Option<UpdateMetadata>,
+    }
+
+    #[derive(Clone, Serialize)]
+    #[serde(tag = "event", content = "data")]
+    pub enum DownloadEvent {
+        #[serde(rename_all = "camelCase")]
+        Started { content_length: Option<u64> },
+        #[serde(rename_all = "camelCase")]
+        Progress { chunk_length: usize },
+        Finished,
+    }
+
+    fn endpoint_for_source(source: &str) -> Result<&'static str, String> {
+        match source {
+            "gitee" => Ok(GITEE_ENDPOINT),
+            "github" => Ok(GITHUB_ENDPOINT),
+            _ => Err(format!("unknown update source: {source}")),
+        }
+    }
+
+    #[tauri::command]
+    pub async fn check_app_update(
+        app: AppHandle,
+        source: String,
+        pending: State<'_, PendingUpdate>,
+    ) -> Result<UpdateCheckResult, String> {
+        let endpoint = endpoint_for_source(&source)?
+            .parse()
+            .map_err(|error| format!("invalid updater endpoint: {error}"))?;
+        let update = app
+            .updater_builder()
+            .endpoints(vec![endpoint])
+            .map_err(|error| error.to_string())?
+            .build()
+            .map_err(|error| error.to_string())?
+            .check()
+            .await
+            .map_err(|error| error.to_string())?;
+        let metadata = update.as_ref().map(|update| UpdateMetadata {
+            version: update.version.clone(),
+            notes: update.body.clone(),
+        });
+        *pending.0.lock().map_err(|_| "update state poisoned")? = update;
+        Ok(UpdateCheckResult {
+            current_version: app.package_info().version.to_string(),
+            update: metadata,
+        })
+    }
+
+    #[tauri::command]
+    pub async fn install_app_update(
+        pending: State<'_, PendingUpdate>,
+        on_event: Channel<DownloadEvent>,
+    ) -> Result<(), String> {
+        let update = pending
+            .0
+            .lock()
+            .map_err(|_| "update state poisoned")?
+            .take()
+            .ok_or_else(|| "no pending update".to_string())?;
+        let mut started = false;
+        update
+            .download_and_install(
+                |chunk_length, content_length| {
+                    if !started {
+                        let _ = on_event.send(DownloadEvent::Started { content_length });
+                        started = true;
+                    }
+                    let _ = on_event.send(DownloadEvent::Progress { chunk_length });
+                },
+                || {
+                    let _ = on_event.send(DownloadEvent::Finished);
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -209,14 +315,21 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            {
+                app.manage(app_updates::PendingUpdate(Mutex::new(None)));
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             msp_debug_connect,
             msp_debug_disconnect,
-            msp_debug_poll
+            msp_debug_poll,
+            #[cfg(desktop)]
+            app_updates::check_app_update,
+            #[cfg(desktop)]
+            app_updates::install_app_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running Gyro ELRS Configurator");

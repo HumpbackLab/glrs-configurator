@@ -19,7 +19,7 @@ jobs:
             bundles: nsis
           - name: Linux
             platform: ubuntu-22.04
-            bundles: deb,appimage
+            bundles: deb
 
     runs-on: ${{ matrix.platform }}
     concurrency:

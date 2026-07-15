@@ -167,6 +167,9 @@
   "appUpdate": {
     "heading": "Configurator Update",
     "description": "Check for and install a new Gyro ELRS Configurator version. The app closes during installation and relaunches when finished.",
+    "source": "Update source",
+    "sourceGitee": "Gitee (China mirror)",
+    "sourceGithub": "GitHub",
     "downloading": "Downloading and verifying update",
     "status": {
       "idle": "App updates have not been checked yet",

@@ -6,6 +6,16 @@ import { t, setLocale, getLocale } from './i18n.js';
 const DEFAULT_API = 'http://10.0.0.1';
 const API_STORAGE_KEY = 'elrs-local-rx-api';
 const LOCAL_PROXY_PATH = '/__elrs_proxy__';
+const UPDATE_SOURCE_STORAGE_KEY = 'elrs-app-update-source';
+
+function defaultUpdateSource() {
+  return getLocale() === 'zh-CN' ? 'gitee' : 'github';
+}
+
+function loadUpdateSource() {
+  const stored = localStorage.getItem(UPDATE_SOURCE_STORAGE_KEY);
+  return stored === 'gitee' || stored === 'github' ? stored : defaultUpdateSource();
+}
 
 const state = {
   apiBase: loadApiBase(),
@@ -21,6 +31,7 @@ const state = {
   busy: false,
   uploadResult: null,
   uploadProgress: null,
+  updateSource: loadUpdateSource(),
   appUpdate: {
     status: 'idle',
     currentVersion: '',
@@ -45,7 +56,6 @@ let debugPollTimer = null;
 let debugPollInFlight = false;
 let debugPollGeneration = 0;
 let debugAircraftView = null;
-let pendingAppUpdate = null;
 
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -955,43 +965,40 @@ async function checkAppUpdate() {
   state.appUpdate = {...state.appUpdate, status: 'checking', error: '', downloaded: 0, total: 0};
   render();
   try {
-    const [{check}, {getVersion}] = await Promise.all([
-      import('@tauri-apps/plugin-updater'),
-      import('@tauri-apps/api/app'),
-    ]);
-    const [update, currentVersion] = await Promise.all([check(), getVersion()]);
-    pendingAppUpdate = update;
+    const result = await tauriInvoke('check_app_update', {source: state.updateSource});
+    const update = result.update;
     state.appUpdate = {
       status: update ? 'available' : 'current',
-      currentVersion,
+      currentVersion: result.currentVersion,
       version: update?.version || '',
-      notes: update?.body || '',
+      notes: update?.notes || '',
       downloaded: 0,
       total: 0,
       error: '',
     };
   } catch (error) {
-    pendingAppUpdate = null;
     state.appUpdate = {...state.appUpdate, status: 'error', error: String(error)};
   }
   render();
 }
 
 async function installAppUpdate() {
-  if (!pendingAppUpdate || state.appUpdate.status !== 'available') return;
+  if (state.appUpdate.status !== 'available') return;
 
-  const update = pendingAppUpdate;
   state.appUpdate = {...state.appUpdate, status: 'downloading', downloaded: 0, total: 0, error: ''};
   render();
   try {
     let downloaded = 0;
     let total = 0;
-    await update.downloadAndInstall((event) => {
+    const {invoke, Channel} = await import('@tauri-apps/api/core');
+    const onEvent = new Channel();
+    onEvent.onmessage = (event) => {
       if (event.event === 'Started') total = event.data.contentLength || 0;
       if (event.event === 'Progress') downloaded += event.data.chunkLength;
       state.appUpdate = {...state.appUpdate, downloaded, total};
       render();
-    });
+    };
+    await invoke('install_app_update', {onEvent});
     state.appUpdate = {...state.appUpdate, status: 'installed', downloaded, total};
     render();
     const {relaunch} = await import('@tauri-apps/plugin-process');
@@ -1625,6 +1632,13 @@ function renderUpdate() {
       <section class="panel">
         <h2>${t('appUpdate.heading')}</h2>
         <p class="helper">${t('appUpdate.description')}</p>
+        <div class="row">
+          <label for="app-update-source">${t('appUpdate.source')}</label>
+          <select id="app-update-source" ${['checking', 'downloading', 'installed'].includes(appUpdate.status) ? 'disabled' : ''}>
+            <option value="gitee" ${state.updateSource === 'gitee' ? 'selected' : ''}>${t('appUpdate.sourceGitee')}</option>
+            <option value="github" ${state.updateSource === 'github' ? 'selected' : ''}>${t('appUpdate.sourceGithub')}</option>
+          </select>
+        </div>
         <div class="notice app-update-status">${escapeHtml(appStatus)}</div>
         ${appUpdate.error ? `<div class="message error">${escapeHtml(appUpdate.error)}</div>` : ''}
         ${appUpdate.notes ? `<div class="app-update-notes">${escapeHtml(appUpdate.notes)}</div>` : ''}
@@ -1874,7 +1888,15 @@ function render() {
 function wireEvents() {
   document.querySelector('.lang-switch')?.addEventListener('change', (event) => {
     setLocale(event.target.value);
+    if (!localStorage.getItem(UPDATE_SOURCE_STORAGE_KEY)) state.updateSource = defaultUpdateSource();
     document.title = t('app.title');
+    render();
+  });
+
+  document.querySelector('#app-update-source')?.addEventListener('change', (event) => {
+    state.updateSource = event.target.value;
+    localStorage.setItem(UPDATE_SOURCE_STORAGE_KEY, state.updateSource);
+    state.appUpdate = {...state.appUpdate, status: 'idle', version: '', notes: '', error: ''};
     render();
   });
 

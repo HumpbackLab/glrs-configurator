@@ -167,6 +167,9 @@
   "appUpdate": {
     "heading": "配置器更新",
     "description": "检查并安装 Gyro ELRS Configurator 的新版本。安装时应用将自动关闭，完成后重新启动。",
+    "source": "更新源",
+    "sourceGitee": "Gitee（国内推荐）",
+    "sourceGithub": "GitHub",
     "downloading": "正在下载并验证更新",
     "status": {
       "idle": "尚未检查应用更新",
