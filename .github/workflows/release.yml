@@ -79,3 +79,25 @@ jobs:
           tagName: ${{ github.event.release.tag_name }}
           updaterJsonPreferNsis: true
           args: --config src-tauri/tauri.release.conf.json --bundles ${{ matrix.bundles }}
+
+  sync-gitee:
+    name: Sync release to Gitee
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Sync GitHub release and updater manifest to Gitee
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_REPOSITORY: ${{ vars.GITEE_REPOSITORY || 'ncer/glrs-configurator' }}
+        run: |
+          ./scripts/sync-github-release-to-gitee.sh \
+            "${{ github.repository }}" \
+            "$GITEE_REPOSITORY" \
+            "${{ github.event.release.tag_name }}"

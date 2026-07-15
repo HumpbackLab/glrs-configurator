@@ -54,6 +54,9 @@ npm run tauri build    # 生产构建
 
 - `TAURI_SIGNING_PRIVATE_KEY`：Tauri updater 私钥的完整内容
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：私钥密码；无密码密钥可留空
+- `GITEE_TOKEN`：具有目标 Gitee 仓库 Release 和文件写入权限的私人令牌
+
+发布工作流会在 Windows 和 Linux 构建全部成功后，将 Release 及其附件同步到 `ncer/glrs-configurator`，并更新 `master/updater/latest.json`。如需使用其他 Gitee 仓库，可在 GitHub Actions variables 中设置 `GITEE_REPOSITORY`（格式为 `owner/repository`）。
 
 私钥不得提交到仓库，且必须安全备份；丢失私钥后，已安装的应用将无法升级到使用新密钥签名的版本。
 
@@ -71,11 +74,9 @@ export GITEE_TOKEN="你的 Gitee 私人令牌"
   v0.1.0
 ```
 
-如需为 Tauri 提供不随 tag 改变的更新地址，可同时将改写后的 `latest.json` 发布到 Gitee 仓库固定路径：
+脚本默认还会将改写后的 `latest.json` 发布到 Gitee 仓库的 `master/updater/latest.json`，为 Tauri 提供不随 tag 改变的更新地址：
 
 ```bash
-export GITEE_MANIFEST_BRANCH=master
-export GITEE_MANIFEST_PATH=updater/latest.json
 ./scripts/sync-github-release-to-gitee.sh \
   HumpbackLab/glrs-configurator \
   your-gitee-owner/glrs-configurator \
@@ -83,6 +84,8 @@ export GITEE_MANIFEST_PATH=updater/latest.json
 ```
 
 此时稳定地址为 `https://raw.giteeusercontent.com/your-gitee-owner/glrs-configurator/raw/master/updater/latest.json`。目标仓库必须是公开仓库，桌面客户端才能在不携带令牌的情况下检查和下载更新。
+
+如需使用其他分支或路径，可通过 `GITEE_MANIFEST_BRANCH` 和 `GITEE_MANIFEST_PATH` 覆盖默认值。
 
 ## 连接到设备
 
