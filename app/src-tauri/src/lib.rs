@@ -232,9 +232,13 @@ mod app_updates {
     #[serde(tag = "event", content = "data")]
     pub enum DownloadEvent {
         #[serde(rename_all = "camelCase")]
-        Started { content_length: Option<u64> },
+        Started {
+            content_length: Option<u64>,
+        },
         #[serde(rename_all = "camelCase")]
-        Progress { chunk_length: usize },
+        Progress {
+            chunk_length: usize,
+        },
         Finished,
     }
 
@@ -305,6 +309,333 @@ mod app_updates {
     }
 }
 
+#[cfg(desktop)]
+mod firmware_updates {
+    use reqwest::Client;
+    use serde::{Deserialize, Serialize};
+    use sha2::{Digest, Sha256};
+    use std::fs::{self, File};
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+    use std::time::Duration;
+    use tauri::{ipc::Channel, AppHandle, Manager, State};
+
+    const GITHUB_MANIFEST: &str =
+        "https://github.com/HumpbackLab/Gyro-ELRS/releases/latest/download/firmware-latest.json";
+    const GITEE_MANIFEST: &str =
+        "https://raw.giteeusercontent.com/ncer/Gyro-ELRS/raw/elrs_fc/updater/firmware-latest.json";
+    const GITHUB_DOWNLOAD_PREFIX: &str =
+        "https://github.com/HumpbackLab/Gyro-ELRS/releases/download/";
+    const GITEE_DOWNLOAD_PREFIX: &str =
+        "https://raw.giteeusercontent.com/ncer/Gyro-ELRS/raw/elrs_fc/updater/firmware/";
+    const MAX_FIRMWARE_SIZE: u64 = 8 * 1024 * 1024;
+
+    #[derive(Deserialize)]
+    struct FirmwareManifest {
+        schema: u32,
+        version: String,
+        published_at: String,
+        firmwares: Vec<FirmwareEntry>,
+    }
+
+    #[derive(Clone, Deserialize)]
+    struct FirmwareEntry {
+        product_name: String,
+        target: String,
+        filename: String,
+        size: u64,
+        sha256: String,
+        sources: FirmwareSources,
+    }
+
+    #[derive(Clone, Deserialize)]
+    struct FirmwareSources {
+        github: String,
+        gitee: String,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DeviceFirmware {
+        product_name: String,
+        target: String,
+        version: String,
+    }
+
+    #[derive(Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct FirmwareMetadata {
+        product_name: String,
+        target: String,
+        filename: String,
+        size: u64,
+        sha256: String,
+        version: String,
+        published_at: String,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct FirmwareCheckResult {
+        current_version: String,
+        latest_version: String,
+        update: Option<FirmwareMetadata>,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DownloadedFirmware {
+        path: String,
+        filename: String,
+    }
+
+    #[derive(Clone, Serialize)]
+    #[serde(tag = "event", content = "data")]
+    pub enum DownloadEvent {
+        #[serde(rename_all = "camelCase")]
+        Started {
+            content_length: Option<u64>,
+        },
+        #[serde(rename_all = "camelCase")]
+        Progress {
+            chunk_length: usize,
+        },
+        Finished,
+    }
+
+    struct PendingFirmware {
+        entry: FirmwareEntry,
+        source: String,
+    }
+
+    pub struct PendingFirmwareUpdate(Mutex<Option<PendingFirmware>>);
+
+    impl PendingFirmwareUpdate {
+        pub fn new() -> Self {
+            Self(Mutex::new(None))
+        }
+    }
+
+    fn manifest_endpoint(source: &str) -> Result<&'static str, String> {
+        match source {
+            "github" => Ok(GITHUB_MANIFEST),
+            "gitee" => Ok(GITEE_MANIFEST),
+            _ => Err(format!("unknown firmware source: {source}")),
+        }
+    }
+
+    fn download_url(entry: &FirmwareEntry, source: &str) -> Result<String, String> {
+        let (url, prefix) = match source {
+            "github" => (&entry.sources.github, GITHUB_DOWNLOAD_PREFIX),
+            "gitee" => (&entry.sources.gitee, GITEE_DOWNLOAD_PREFIX),
+            _ => return Err(format!("unknown firmware source: {source}")),
+        };
+        if !url.starts_with(prefix) {
+            return Err("firmware download URL is not from the selected source".into());
+        }
+        Ok(url.clone())
+    }
+
+    fn display_version(version: &str) -> String {
+        version
+            .split_whitespace()
+            .next()
+            .unwrap_or(version)
+            .to_string()
+    }
+
+    fn safe_filename(filename: &str) -> Result<&str, String> {
+        let path = Path::new(filename);
+        if path.file_name().and_then(|name| name.to_str()) != Some(filename) {
+            return Err("invalid firmware filename".into());
+        }
+        Ok(filename)
+    }
+
+    fn available_path(download_dir: &Path, filename: &str) -> PathBuf {
+        let requested = download_dir.join(filename);
+        if !requested.exists() {
+            return requested;
+        }
+        let path = Path::new(filename);
+        let stem = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("firmware");
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("bin");
+        for suffix in 1..1000 {
+            let candidate = download_dir.join(format!("{stem} ({suffix}).{extension}"));
+            if !candidate.exists() {
+                return candidate;
+            }
+        }
+        download_dir.join(format!("{stem}-download.{extension}"))
+    }
+
+    #[tauri::command]
+    pub async fn check_firmware_update(
+        device: Option<DeviceFirmware>,
+        source: String,
+        pending: State<'_, PendingFirmwareUpdate>,
+    ) -> Result<FirmwareCheckResult, String> {
+        let response = Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .map_err(|error| error.to_string())?
+            .get(manifest_endpoint(&source)?)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?
+            .error_for_status()
+            .map_err(|error| error.to_string())?;
+        let manifest: FirmwareManifest =
+            response.json().await.map_err(|error| error.to_string())?;
+        if manifest.schema != 1 {
+            return Err(format!(
+                "unsupported firmware manifest schema {}",
+                manifest.schema
+            ));
+        }
+        let entry = if let Some(device) = device.as_ref() {
+            manifest
+                .firmwares
+                .into_iter()
+                .find(|entry| {
+                    entry.product_name == device.product_name && entry.target == device.target
+                })
+                .ok_or_else(|| "no compatible firmware found for this device".to_string())?
+        } else {
+            let mut firmwares = manifest.firmwares.into_iter();
+            let entry = firmwares
+                .next()
+                .ok_or_else(|| "firmware manifest is empty".to_string())?;
+            if firmwares.next().is_some() {
+                return Err("connect the receiver before selecting from multiple firmwares".into());
+            }
+            entry
+        };
+        if entry.size == 0 || entry.size > MAX_FIRMWARE_SIZE {
+            return Err("firmware size is invalid".into());
+        }
+        if entry.sha256.len() != 64 || !entry.sha256.chars().all(|value| value.is_ascii_hexdigit())
+        {
+            return Err("firmware SHA-256 is invalid".into());
+        }
+        safe_filename(&entry.filename)?;
+        download_url(&entry, &source)?;
+
+        let current_version = device
+            .as_ref()
+            .map(|device| display_version(&device.version))
+            .unwrap_or_default();
+        let update = if !current_version.is_empty() && current_version == manifest.version {
+            None
+        } else {
+            Some(FirmwareMetadata {
+                product_name: entry.product_name.clone(),
+                target: entry.target.clone(),
+                filename: entry.filename.clone(),
+                size: entry.size,
+                sha256: entry.sha256.clone(),
+                version: manifest.version.clone(),
+                published_at: manifest.published_at.clone(),
+            })
+        };
+        *pending
+            .0
+            .lock()
+            .map_err(|_| "firmware update state poisoned")? =
+            update.as_ref().map(|_| PendingFirmware { entry, source });
+
+        Ok(FirmwareCheckResult {
+            current_version,
+            latest_version: manifest.version,
+            update,
+        })
+    }
+
+    #[tauri::command]
+    pub async fn download_firmware_update(
+        app: AppHandle,
+        pending: State<'_, PendingFirmwareUpdate>,
+        on_event: Channel<DownloadEvent>,
+    ) -> Result<DownloadedFirmware, String> {
+        let pending = pending
+            .0
+            .lock()
+            .map_err(|_| "firmware update state poisoned")?
+            .take()
+            .ok_or_else(|| "no pending firmware update".to_string())?;
+        let url = download_url(&pending.entry, &pending.source)?;
+        let mut response = Client::builder()
+            .timeout(Duration::from_secs(120))
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .build()
+            .map_err(|error| error.to_string())?
+            .get(url)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?
+            .error_for_status()
+            .map_err(|error| error.to_string())?;
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_FIRMWARE_SIZE)
+        {
+            return Err("firmware download is too large".into());
+        }
+
+        let download_dir = app
+            .path()
+            .download_dir()
+            .map_err(|error| error.to_string())?;
+        let destination = available_path(&download_dir, safe_filename(&pending.entry.filename)?);
+        let temporary = destination.with_extension("bin.part");
+        let mut file = File::create(&temporary).map_err(|error| error.to_string())?;
+        let mut hasher = Sha256::new();
+        let mut downloaded = 0u64;
+        let _ = on_event.send(DownloadEvent::Started {
+            content_length: response.content_length(),
+        });
+        while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+            downloaded += chunk.len() as u64;
+            if downloaded > MAX_FIRMWARE_SIZE {
+                let _ = fs::remove_file(&temporary);
+                return Err("firmware download is too large".into());
+            }
+            file.write_all(&chunk).map_err(|error| error.to_string())?;
+            hasher.update(&chunk);
+            let _ = on_event.send(DownloadEvent::Progress {
+                chunk_length: chunk.len(),
+            });
+        }
+        drop(file);
+
+        let actual_sha256 = format!("{:x}", hasher.finalize());
+        if downloaded != pending.entry.size
+            || actual_sha256 != pending.entry.sha256.to_ascii_lowercase()
+        {
+            let _ = fs::remove_file(&temporary);
+            return Err("downloaded firmware failed size or SHA-256 verification".into());
+        }
+        fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
+        let _ = on_event.send(DownloadEvent::Finished);
+
+        Ok(DownloadedFirmware {
+            filename: destination
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(&pending.entry.filename)
+                .to_string(),
+            path: destination.to_string_lossy().to_string(),
+        })
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -317,6 +648,7 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 app.manage(app_updates::PendingUpdate(Mutex::new(None)));
+                app.manage(firmware_updates::PendingFirmwareUpdate::new());
                 app.handle()
                     .plugin(tauri_plugin_updater::Builder::new().build())?;
             }
@@ -329,7 +661,11 @@ pub fn run() {
             #[cfg(desktop)]
             app_updates::check_app_update,
             #[cfg(desktop)]
-            app_updates::install_app_update
+            app_updates::install_app_update,
+            #[cfg(desktop)]
+            firmware_updates::check_firmware_update,
+            #[cfg(desktop)]
+            firmware_updates::download_firmware_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running Gyro ELRS Configurator");

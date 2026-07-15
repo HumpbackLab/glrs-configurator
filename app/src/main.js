@@ -41,6 +41,18 @@ const state = {
     total: 0,
     error: '',
   },
+  firmwareUpdate: {
+    status: 'idle',
+    currentVersion: '',
+    latestVersion: '',
+    productName: '',
+    target: '',
+    filename: '',
+    downloaded: 0,
+    total: 0,
+    path: '',
+    error: '',
+  },
   extraMixerRows: 0,
   eulerRoll: 0,
   eulerPitch: 0,
@@ -608,6 +620,34 @@ async function loadDevice() {
   state.target = target;
   state.configResponse = configResponse;
   state.hardware = hardwareResponse;
+  const currentFirmwareVersion = (target?.version || '').split(/\s+/, 1)[0];
+  const cachedFirmwareMatches = state.firmwareUpdate.latestVersion
+    && state.firmwareUpdate.productName === (target?.product_name || '')
+    && state.firmwareUpdate.target === (target?.target || '');
+  if (cachedFirmwareMatches) {
+    state.firmwareUpdate = {
+      ...state.firmwareUpdate,
+      status: currentFirmwareVersion === state.firmwareUpdate.latestVersion
+        ? 'current'
+        : (state.firmwareUpdate.path ? 'downloaded' : 'available'),
+      currentVersion: currentFirmwareVersion,
+      error: '',
+    };
+  } else {
+    state.firmwareUpdate = {
+      ...state.firmwareUpdate,
+      status: 'idle',
+      currentVersion: currentFirmwareVersion,
+      latestVersion: '',
+      productName: '',
+      target: '',
+      filename: '',
+      downloaded: 0,
+      total: 0,
+      path: '',
+      error: '',
+    };
+  }
   state.extraMixerRows = 0;
   state.originalUid = bytesToList(configResponse?.config?.uid);
   state.originalUidType = configResponse?.config?.uidtype || '';
@@ -1007,6 +1047,72 @@ async function installAppUpdate() {
     state.appUpdate = {...state.appUpdate, status: 'error', error: String(error)};
     render();
   }
+}
+
+async function checkFirmwareUpdate() {
+  if (!isTauriApp()) {
+    state.firmwareUpdate = {...state.firmwareUpdate, status: 'unsupported'};
+    render();
+    return;
+  }
+  state.firmwareUpdate = {...state.firmwareUpdate, status: 'checking', error: '', path: '', downloaded: 0, total: 0};
+  render();
+  try {
+    const result = await tauriInvoke('check_firmware_update', {
+      source: state.updateSource,
+      device: state.target ? {
+        productName: state.target.product_name || '',
+        target: state.target.target || '',
+        version: state.target.version || '',
+      } : null,
+    });
+    state.firmwareUpdate = {
+      status: result.update ? (state.target ? 'available' : 'availableUnconnected') : 'current',
+      currentVersion: result.currentVersion,
+      latestVersion: result.latestVersion,
+      productName: result.update?.productName || state.target?.product_name || '',
+      target: result.update?.target || state.target?.target || '',
+      filename: result.update?.filename || '',
+      downloaded: 0,
+      total: result.update?.size || 0,
+      path: '',
+      error: '',
+    };
+  } catch (error) {
+    state.firmwareUpdate = {...state.firmwareUpdate, status: 'error', error: String(error)};
+  }
+  render();
+}
+
+async function downloadFirmwareUpdate() {
+  if (!['available', 'availableUnconnected'].includes(state.firmwareUpdate.status)) return;
+
+  state.firmwareUpdate = {...state.firmwareUpdate, status: 'downloading', downloaded: 0, error: '', path: ''};
+  render();
+  try {
+    let downloaded = 0;
+    let total = state.firmwareUpdate.total;
+    const {invoke, Channel} = await import('@tauri-apps/api/core');
+    const onEvent = new Channel();
+    onEvent.onmessage = (event) => {
+      if (event.event === 'Started') total = event.data.contentLength || total;
+      if (event.event === 'Progress') downloaded += event.data.chunkLength;
+      state.firmwareUpdate = {...state.firmwareUpdate, downloaded, total};
+      render();
+    };
+    const result = await invoke('download_firmware_update', {onEvent});
+    state.firmwareUpdate = {
+      ...state.firmwareUpdate,
+      status: 'downloaded',
+      downloaded: total || downloaded,
+      total: total || downloaded,
+      filename: result.filename,
+      path: result.path,
+    };
+  } catch (error) {
+    state.firmwareUpdate = {...state.firmwareUpdate, status: 'error', error: String(error)};
+  }
+  render();
 }
 
 async function tauriInvoke(command, args = {}) {
@@ -1627,6 +1733,13 @@ function renderUpdate() {
     current: appUpdate.currentVersion,
     version: appUpdate.version,
   });
+  const firmwareUpdate = state.firmwareUpdate;
+  const firmwareProgressPercent = firmwareUpdate.total ? Math.max(0, Math.min(100, Math.round((firmwareUpdate.downloaded / firmwareUpdate.total) * 100))) : 0;
+  const firmwareStatus = t(`firmwareUpdate.status.${firmwareUpdate.status}`, {
+    current: firmwareUpdate.currentVersion,
+    latest: firmwareUpdate.latestVersion,
+    filename: firmwareUpdate.filename,
+  });
   return `
     <div class="grid">
       <section class="panel">
@@ -1650,6 +1763,23 @@ function renderUpdate() {
       </section>
       <section class="panel">
         <h2>${t('update.heading')}</h2>
+        <p class="helper">${t('firmwareUpdate.description')}</p>
+        <div class="row">
+          <label for="firmware-update-source">${t('appUpdate.source')}</label>
+          <select id="firmware-update-source" ${['checking', 'downloading'].includes(firmwareUpdate.status) ? 'disabled' : ''}>
+            <option value="gitee" ${state.updateSource === 'gitee' ? 'selected' : ''}>${t('appUpdate.sourceGitee')}</option>
+            <option value="github" ${state.updateSource === 'github' ? 'selected' : ''}>${t('appUpdate.sourceGithub')}</option>
+          </select>
+        </div>
+        <div class="notice app-update-status">${escapeHtml(firmwareStatus)}</div>
+        ${firmwareUpdate.error ? `<div class="message error">${escapeHtml(firmwareUpdate.error)}</div>` : ''}
+        ${firmwareUpdate.path ? `<div class="app-update-notes">${escapeHtml(t('firmwareUpdate.savedTo', {path: firmwareUpdate.path}))}</div>` : ''}
+        ${firmwareUpdate.status === 'downloading' ? `<div class="upload-progress"><div class="upload-progress-meta"><span>${t('firmwareUpdate.downloading')}</span><strong>${firmwareProgressPercent}%</strong></div><div class="upload-progress-bar"><span style="width:${firmwareProgressPercent}%"></span></div></div>` : ''}
+        <div class="actions">
+          <button class="secondary" type="button" data-action="firmware-update-check" ${['checking', 'downloading'].includes(firmwareUpdate.status) ? 'disabled' : ''}>${t('action.checkFirmwareUpdate')}</button>
+          ${['available', 'availableUnconnected'].includes(firmwareUpdate.status) ? `<button class="primary" type="button" data-action="firmware-update-download">${t('action.downloadLatestFirmware')}</button>` : ''}
+        </div>
+        <hr>
         ${uploadError}
         <form id="update-form">
           <div class="row"><label for="firmware">${t('update.firmwareFile')}</label><input id="firmware" name="firmware" type="file"></div>
@@ -1893,12 +2023,15 @@ function wireEvents() {
     render();
   });
 
-  document.querySelector('#app-update-source')?.addEventListener('change', (event) => {
+  const updateSourceChanged = (event) => {
     state.updateSource = event.target.value;
     localStorage.setItem(UPDATE_SOURCE_STORAGE_KEY, state.updateSource);
     state.appUpdate = {...state.appUpdate, status: 'idle', version: '', notes: '', error: ''};
+    state.firmwareUpdate = {...state.firmwareUpdate, status: 'idle', latestVersion: '', productName: '', target: '', filename: '', path: '', error: ''};
     render();
-  });
+  };
+  document.querySelector('#app-update-source')?.addEventListener('change', updateSourceChanged);
+  document.querySelector('#firmware-update-source')?.addEventListener('change', updateSourceChanged);
 
   document.querySelector('#connect-form')?.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -1985,6 +2118,8 @@ function wireEvents() {
       if (action === 'force-cancel') forceUpdate('cancel');
       if (action === 'app-update-check') checkAppUpdate();
       if (action === 'app-update-install') installAppUpdate();
+      if (action === 'firmware-update-check') checkFirmwareUpdate();
+      if (action === 'firmware-update-download') downloadFirmwareUpdate();
     });
   });
 }

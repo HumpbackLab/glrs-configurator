@@ -34,7 +34,9 @@
     "startPolling": "Start Polling",
     "stop": "Stop",
     "checkUpdate": "Check for App Updates",
-    "installUpdate": "Download and Install"
+    "installUpdate": "Download and Install",
+    "checkFirmwareUpdate": "Check for Firmware Updates",
+    "downloadLatestFirmware": "Download Latest Firmware"
   },
   "notice": {
     "working": "Working...",
@@ -162,6 +164,22 @@
       "uploading": "Uploading firmware",
       "finalizing": "Finalizing update on device",
       "rebooting": "Device accepted update and is rebooting"
+    }
+  },
+  "firmwareUpdate": {
+    "description": "While online, check for and download the latest LightFin Nano firmware. You can then connect to the receiver WiFi to compare versions and flash it manually.",
+    "downloading": "Downloading and verifying firmware",
+    "savedTo": "Firmware saved to {path}",
+    "status": {
+      "idle": "Firmware updates have not been checked yet",
+      "checking": "Checking for firmware updates…",
+      "current": "The receiver is running the latest firmware ({current})",
+      "available": "Firmware {latest} is available; current version is {current}",
+      "availableUnconnected": "Firmware {latest} is available. Download it now, then connect the receiver to compare versions",
+      "downloading": "Downloading {filename}",
+      "downloaded": "Firmware downloaded and verified: {filename}",
+      "error": "Could not check for or download firmware",
+      "unsupported": "Firmware downloads are unavailable in browser development mode"
     }
   },
   "appUpdate": {

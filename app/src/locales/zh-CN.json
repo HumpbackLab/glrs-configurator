@@ -34,7 +34,9 @@
     "startPolling": "开始轮询",
     "stop": "停止",
     "checkUpdate": "检查应用更新",
-    "installUpdate": "下载并安装"
+    "installUpdate": "下载并安装",
+    "checkFirmwareUpdate": "检查固件更新",
+    "downloadLatestFirmware": "下载最新固件"
   },
   "notice": {
     "working": "处理中...",
@@ -162,6 +164,22 @@
       "uploading": "正在上传固件",
       "finalizing": "设备端正在处理",
       "rebooting": "设备已接受更新，正在重启"
+    }
+  },
+  "firmwareUpdate": {
+    "description": "联网时检查并下载最新 LightFin Nano 固件；随后连接接收机 WiFi，即可比较版本并使用下方功能手动刷写。",
+    "downloading": "正在下载并校验固件",
+    "savedTo": "固件已保存到 {path}",
+    "status": {
+      "idle": "尚未检查固件更新",
+      "checking": "正在检查固件更新…",
+      "current": "接收机已是最新固件（{current}）",
+      "available": "发现固件 {latest}，当前版本为 {current}",
+      "availableUnconnected": "发现固件 {latest}，可先下载，再连接接收机比较版本",
+      "downloading": "正在下载 {filename}",
+      "downloaded": "固件已下载并校验：{filename}",
+      "error": "检查或下载固件失败",
+      "unsupported": "浏览器开发模式不支持固件下载"
     }
   },
   "appUpdate": {
