@@ -327,8 +327,7 @@ mod firmware_updates {
         "https://raw.giteeusercontent.com/ncer/Gyro-ELRS/raw/elrs_fc/updater/firmware-latest.json";
     const GITHUB_DOWNLOAD_PREFIX: &str =
         "https://github.com/HumpbackLab/Gyro-ELRS/releases/download/";
-    const GITEE_DOWNLOAD_PREFIX: &str =
-        "https://raw.giteeusercontent.com/ncer/Gyro-ELRS/raw/elrs_fc/updater/firmware/";
+    const GITEE_DOWNLOAD_PREFIX: &str = "https://gitee.com/ncer/Gyro-ELRS/releases/download/";
     const MAX_FIRMWARE_SIZE: u64 = 8 * 1024 * 1024;
 
     #[derive(Deserialize)]
@@ -474,6 +473,46 @@ mod firmware_updates {
             }
         }
         download_dir.join(format!("{stem}-download.{extension}"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn firmware_entry(gitee_url: &str) -> FirmwareEntry {
+            FirmwareEntry {
+                product_name: "LightFin Nano 2.4GHz RX".into(),
+                target: "Unified_ESP32C3_2400_RX".into(),
+                filename: "LightFin.Nano.2.4GHz.RX_v0.9.1_e364.bin".into(),
+                size: 1_110_672,
+                sha256: "0b96993dc321962d93b8298358c04d8fd6741bc3825cd8b09389d210c1efb7af"
+                    .into(),
+                sources: FirmwareSources {
+                    github: "https://github.com/HumpbackLab/Gyro-ELRS/releases/download/v0.9.1_e364/LightFin.Nano.2.4GHz.RX_v0.9.1_e364.bin".into(),
+                    gitee: gitee_url.into(),
+                },
+            }
+        }
+
+        #[test]
+        fn accepts_gitee_release_download_url() {
+            let url = "https://gitee.com/ncer/Gyro-ELRS/releases/download/v0.9.1_e364/LightFin.Nano.2.4GHz.RX_v0.9.1_e364.bin";
+            let entry = firmware_entry(url);
+
+            assert_eq!(download_url(&entry, "gitee").unwrap(), url);
+        }
+
+        #[test]
+        fn rejects_gitee_url_outside_release_download_prefix() {
+            let entry = firmware_entry(
+                "https://gitee.com/ncer/Gyro-ELRS/releases/other/v0.9.1_e364/firmware.bin",
+            );
+
+            assert_eq!(
+                download_url(&entry, "gitee").unwrap_err(),
+                "firmware download URL is not from the selected source"
+            );
+        }
     }
 
     #[tauri::command]
