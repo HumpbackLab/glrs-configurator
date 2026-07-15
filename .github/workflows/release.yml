@@ -61,12 +61,21 @@ jobs:
         working-directory: app
         run: npm ci
 
+      - name: Set application version from release tag
+        working-directory: app
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: node -e "const fs = require('fs'); const version = process.env.RELEASE_TAG.replace(/^v/, ''); if (!/^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$/.test(version)) throw new Error('Release tag must be vX.Y.Z or X.Y.Z'); fs.writeFileSync('src-tauri/tauri.release.conf.json', JSON.stringify({ version }));"
+
       - name: Build and attach package to the GitHub Release
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: app
           releaseId: ${{ github.event.release.id }}
           tagName: ${{ github.event.release.tag_name }}
-          args: --bundles ${{ matrix.bundles }}
+          updaterJsonPreferNsis: true
+          args: --config src-tauri/tauri.release.conf.json --bundles ${{ matrix.bundles }}

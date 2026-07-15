@@ -32,7 +32,9 @@
     "addMotor": "Add Motor",
     "removeMotor": "Remove Motor",
     "startPolling": "Start Polling",
-    "stop": "Stop"
+    "stop": "Stop",
+    "checkUpdate": "Check for App Updates",
+    "installUpdate": "Download and Install"
   },
   "notice": {
     "working": "Working...",
@@ -160,6 +162,21 @@
       "uploading": "Uploading firmware",
       "finalizing": "Finalizing update on device",
       "rebooting": "Device accepted update and is rebooting"
+    }
+  },
+  "appUpdate": {
+    "heading": "Configurator Update",
+    "description": "Check for and install a new Gyro ELRS Configurator version. The app closes during installation and relaunches when finished.",
+    "downloading": "Downloading and verifying update",
+    "status": {
+      "idle": "App updates have not been checked yet",
+      "checking": "Checking for app updates…",
+      "current": "You are running the latest version ({current})",
+      "available": "Version {version} is available; current version is {current}",
+      "downloading": "Downloading version {version}",
+      "installed": "Update installed; relaunching…",
+      "error": "Could not check for or install the update",
+      "unsupported": "Automatic app updates are unavailable in browser development mode"
     }
   },
   "value": {

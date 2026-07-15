@@ -25,6 +25,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -36,5 +37,16 @@
     "category": "DeveloperTool",
     "shortDescription": "ELRS gyro and flight-control configurator",
     "longDescription": "Configurator for ELRS basic flight-control receivers using HTTP configuration and future MSP-over-WiFi debug polling."
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaW5pIHB1YmxpYyBrZXk6IEEyRUYwOUQ0QjdDODFFRkQKUldUOUhzaTMxQW52b3ZlellMbVJncDQraEtTR3RTcDdNSTlwcXZRcWRJekRaRnNIdHNmbGZKNnoK",
+      "endpoints": [
+        "https://github.com/HumpbackLab/glrs-configurator/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

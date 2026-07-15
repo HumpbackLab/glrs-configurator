@@ -21,6 +21,15 @@ const state = {
   busy: false,
   uploadResult: null,
   uploadProgress: null,
+  appUpdate: {
+    status: 'idle',
+    currentVersion: '',
+    version: '',
+    notes: '',
+    downloaded: 0,
+    total: 0,
+    error: '',
+  },
   extraMixerRows: 0,
   eulerRoll: 0,
   eulerPitch: 0,
@@ -36,6 +45,7 @@ let debugPollTimer = null;
 let debugPollInFlight = false;
 let debugPollGeneration = 0;
 let debugAircraftView = null;
+let pendingAppUpdate = null;
 
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -931,6 +941,67 @@ async function forceUpdate(action) {
   }, action === 'confirm' ? t('message.forceConfirmed') : t('message.forceCancelled'));
 }
 
+function isTauriApp() {
+  return Boolean(window.__TAURI_INTERNALS__);
+}
+
+async function checkAppUpdate() {
+  if (!isTauriApp()) {
+    state.appUpdate.status = 'unsupported';
+    render();
+    return;
+  }
+
+  state.appUpdate = {...state.appUpdate, status: 'checking', error: '', downloaded: 0, total: 0};
+  render();
+  try {
+    const [{check}, {getVersion}] = await Promise.all([
+      import('@tauri-apps/plugin-updater'),
+      import('@tauri-apps/api/app'),
+    ]);
+    const [update, currentVersion] = await Promise.all([check(), getVersion()]);
+    pendingAppUpdate = update;
+    state.appUpdate = {
+      status: update ? 'available' : 'current',
+      currentVersion,
+      version: update?.version || '',
+      notes: update?.body || '',
+      downloaded: 0,
+      total: 0,
+      error: '',
+    };
+  } catch (error) {
+    pendingAppUpdate = null;
+    state.appUpdate = {...state.appUpdate, status: 'error', error: String(error)};
+  }
+  render();
+}
+
+async function installAppUpdate() {
+  if (!pendingAppUpdate || state.appUpdate.status !== 'available') return;
+
+  const update = pendingAppUpdate;
+  state.appUpdate = {...state.appUpdate, status: 'downloading', downloaded: 0, total: 0, error: ''};
+  render();
+  try {
+    let downloaded = 0;
+    let total = 0;
+    await update.downloadAndInstall((event) => {
+      if (event.event === 'Started') total = event.data.contentLength || 0;
+      if (event.event === 'Progress') downloaded += event.data.chunkLength;
+      state.appUpdate = {...state.appUpdate, downloaded, total};
+      render();
+    });
+    state.appUpdate = {...state.appUpdate, status: 'installed', downloaded, total};
+    render();
+    const {relaunch} = await import('@tauri-apps/plugin-process');
+    await relaunch();
+  } catch (error) {
+    state.appUpdate = {...state.appUpdate, status: 'error', error: String(error)};
+    render();
+  }
+}
+
 async function tauriInvoke(command, args = {}) {
   const api = await import('@tauri-apps/api/core');
   return api.invoke(command, args);
@@ -1543,16 +1614,36 @@ function renderUpdate() {
     ? `<div class="notice">${escapeHtml(state.uploadResult.msg || t('update.failed', {status: state.uploadResult.status || t('value.unknown')}))}</div>`
     : '';
   const progressPercent = uploadProgress?.total ? Math.max(0, Math.min(100, Math.round((uploadProgress.loaded / uploadProgress.total) * 100))) : 0;
+  const appUpdate = state.appUpdate;
+  const appProgressPercent = appUpdate.total ? Math.max(0, Math.min(100, Math.round((appUpdate.downloaded / appUpdate.total) * 100))) : 0;
+  const appStatus = t(`appUpdate.status.${appUpdate.status}`, {
+    current: appUpdate.currentVersion,
+    version: appUpdate.version,
+  });
   return `
-    <section class="panel">
-      <h2>${t('update.heading')}</h2>
-      ${uploadError}
-      <form id="update-form">
-        <div class="row"><label for="firmware">${t('update.firmwareFile')}</label><input id="firmware" name="firmware" type="file"></div>
-        ${uploadProgress ? `<div class="upload-progress"><div class="upload-progress-meta"><span>${escapeHtml(uploadProgress.phase)}</span><strong>${progressPercent}%</strong></div><div class="upload-progress-bar"><span style="width:${progressPercent}%"></span></div></div>` : ''}
-        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.upload')}</button><a class="secondary button-link" href="${firmwareHref}">${t('action.download')}</a>${mismatch ? `<button class="danger" type="button" data-action="force-confirm">${t('action.flashAnyway')}</button><button class="secondary" type="button" data-action="force-cancel">${t('action.cancel')}</button>` : ''}</div>
-      </form>
-    </section>`;
+    <div class="grid">
+      <section class="panel">
+        <h2>${t('appUpdate.heading')}</h2>
+        <p class="helper">${t('appUpdate.description')}</p>
+        <div class="notice app-update-status">${escapeHtml(appStatus)}</div>
+        ${appUpdate.error ? `<div class="message error">${escapeHtml(appUpdate.error)}</div>` : ''}
+        ${appUpdate.notes ? `<div class="app-update-notes">${escapeHtml(appUpdate.notes)}</div>` : ''}
+        ${appUpdate.status === 'downloading' ? `<div class="upload-progress"><div class="upload-progress-meta"><span>${t('appUpdate.downloading')}</span><strong>${appProgressPercent}%</strong></div><div class="upload-progress-bar"><span style="width:${appProgressPercent}%"></span></div></div>` : ''}
+        <div class="actions">
+          <button class="secondary" type="button" data-action="app-update-check" ${['checking', 'downloading', 'installed'].includes(appUpdate.status) ? 'disabled' : ''}>${t('action.checkUpdate')}</button>
+          ${appUpdate.status === 'available' ? `<button class="primary" type="button" data-action="app-update-install">${t('action.installUpdate')}</button>` : ''}
+        </div>
+      </section>
+      <section class="panel">
+        <h2>${t('update.heading')}</h2>
+        ${uploadError}
+        <form id="update-form">
+          <div class="row"><label for="firmware">${t('update.firmwareFile')}</label><input id="firmware" name="firmware" type="file"></div>
+          ${uploadProgress ? `<div class="upload-progress"><div class="upload-progress-meta"><span>${escapeHtml(uploadProgress.phase)}</span><strong>${progressPercent}%</strong></div><div class="upload-progress-bar"><span style="width:${progressPercent}%"></span></div></div>` : ''}
+          <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.upload')}</button><a class="secondary button-link" href="${firmwareHref}">${t('action.download')}</a>${mismatch ? `<button class="danger" type="button" data-action="force-confirm">${t('action.flashAnyway')}</button><button class="secondary" type="button" data-action="force-cancel">${t('action.cancel')}</button>` : ''}</div>
+        </form>
+      </section>
+    </div>`;
 }
 
 function renderCurrentTab() {
@@ -1870,6 +1961,8 @@ function wireEvents() {
       if (action === 'debug-stop') stopDebugPolling();
       if (action === 'force-confirm') forceUpdate('confirm');
       if (action === 'force-cancel') forceUpdate('cancel');
+      if (action === 'app-update-check') checkAppUpdate();
+      if (action === 'app-update-install') installAppUpdate();
     });
   });
 }
@@ -1976,3 +2069,4 @@ function wireModeRangeEditors() {
 document.title = t('app.title');
 render();
 runBusy(loadDevice, t('message.connected'));
+if (isTauriApp()) checkAppUpdate();

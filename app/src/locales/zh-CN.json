@@ -32,7 +32,9 @@
     "addMotor": "添加电机",
     "removeMotor": "移除电机",
     "startPolling": "开始轮询",
-    "stop": "停止"
+    "stop": "停止",
+    "checkUpdate": "检查应用更新",
+    "installUpdate": "下载并安装"
   },
   "notice": {
     "working": "处理中...",
@@ -160,6 +162,21 @@
       "uploading": "正在上传固件",
       "finalizing": "设备端正在处理",
       "rebooting": "设备已接受更新，正在重启"
+    }
+  },
+  "appUpdate": {
+    "heading": "配置器更新",
+    "description": "检查并安装 Gyro ELRS Configurator 的新版本。安装时应用将自动关闭，完成后重新启动。",
+    "downloading": "正在下载并验证更新",
+    "status": {
+      "idle": "尚未检查应用更新",
+      "checking": "正在检查应用更新…",
+      "current": "当前已是最新版本（{current}）",
+      "available": "发现新版本 {version}，当前版本为 {current}",
+      "downloading": "正在下载版本 {version}",
+      "installed": "更新已安装，正在重新启动…",
+      "error": "检查或安装更新失败",
+      "unsupported": "浏览器开发模式不支持应用自动更新"
     }
   },
   "value": {

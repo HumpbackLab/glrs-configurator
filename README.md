@@ -44,6 +44,17 @@ npm run tauri build    # 生产构建
 
 构建产物位于 `app/src-tauri/target/release/bundle/`。
 
+### 发布与应用自动更新
+
+发布 GitHub Release 后，`.github/workflows/release.yml` 会从 Release 标签构建对应版本，上传 Windows NSIS、Linux DEB/AppImage、更新签名和 `latest.json`。Release 标签必须使用 `vX.Y.Z` 或 `X.Y.Z` 格式。
+
+自动更新包使用 Tauri 签名密钥验证。发布前需要在 GitHub 仓库 Actions secrets 中配置：
+
+- `TAURI_SIGNING_PRIVATE_KEY`：Tauri updater 私钥的完整内容
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：私钥密码；无密码密钥可留空
+
+私钥不得提交到仓库，且必须安全备份；丢失私钥后，已安装的应用将无法升级到使用新密钥签名的版本。
+
 ## 连接到设备
 
 1. 将电脑/手机连接到 ELRS 接收机的 WiFi 热点 (默认 IP: `10.0.0.1`)

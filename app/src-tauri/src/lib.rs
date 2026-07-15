@@ -206,6 +206,13 @@ pub fn run() {
             stream: Mutex::new(None),
         })
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             msp_debug_connect,
             msp_debug_disconnect,
