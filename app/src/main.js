@@ -699,8 +699,21 @@ async function saveFlight(event) {
   const form = event.currentTarget;
   const nextConfig = {...config()};
   await runBusy(async () => {
-    nextConfig.fc_angle_enabled = form.fc_angle_enabled.checked;
+    nextConfig.fc_mode_conditions = {};
+    ['rate', 'angle'].forEach((mode) => {
+      if (!form[`fc_${mode}_enabled`].checked) return;
+      const channel = intOrDefault(form[`fc_${mode}_channel`].value, 6);
+      const start = intOrDefault(form[`fc_${mode}_start`].value, 0);
+      const end = intOrDefault(form[`fc_${mode}_end`].value, 0);
+      if (start < 900 || end > 2100 || start >= end) throw new Error(`${t('message.invalidRange')}: ${mode.toUpperCase()}`);
+      nextConfig.fc_mode_conditions[mode] = [channel, start, end];
+    });
     nextConfig.fc_arm_enabled = form.fc_arm_enabled.checked;
+    nextConfig.fc_arm_channel = intOrDefault(form.fc_arm_channel.value, 5);
+    const armStart = intOrDefault(form.fc_arm_start.value, 0);
+    const armEnd = intOrDefault(form.fc_arm_end.value, 0);
+    if (armStart < 900 || armEnd > 2100 || armStart >= armEnd) throw new Error(`${t('message.invalidRange')}: ARM`);
+    nextConfig.fc_arm_range = [armStart, armEnd];
     nextConfig.fc_rate_pid = readNumGrid(form, 'fc_rate_pid', 3, 4);
     nextConfig.fc_angle_pid = readNumGrid(form, 'fc_angle_pid', 3, 4);
     nextConfig.fc_mixer = readNumGrid(form, 'fc_mixer', motorCount(), 4);
@@ -1065,8 +1078,8 @@ function renderStatus() {
         <div class="metric"><span>${t('status.uidType')}</span><strong>${escapeHtml(c.uidtype || t('value.unknown'))}</strong></div>
         <div class="metric"><span>${t('status.modelId')}</span><strong>${escapeHtml(c.modelid ?? '255')}</strong></div>
         <div class="metric"><span>${t('status.serialProtocol')}</span><strong>${escapeHtml(serialProtocols.find(([v]) => v === String(c['serial-protocol']))?.[1] || c['serial-protocol'] || 'CRSF')}</strong></div>
-        <div class="metric"><span>${t('status.flightAngleLoop')}</span><strong>${configValue('fc_angle_enabled', false) ? t('value.enabled') : t('value.disabled')}</strong></div>
-        <div class="metric"><span>${t('status.ch5MotorArm')}</span><strong>${configValue('fc_arm_enabled', false) ? t('value.enabled') : t('value.disabled')}</strong></div>
+        <div class="metric"><span>${t('status.modeChannel')}</span><strong>${Object.entries(configValue('fc_mode_conditions', {rate: [6]})).map(([mode, condition]) => `${mode.toUpperCase()} CH${condition[0]}`).join(' · ') || 'MANUAL'}</strong></div>
+        <div class="metric"><span>${t('status.armChannel')}</span><strong>${configValue('fc_arm_enabled', false) ? `CH${escapeHtml(configValue('fc_arm_channel', 5))}` : t('value.disabled')}</strong></div>
       </section>
       <section class="panel">
         <h2>${t('status.sensors')}</h2>
@@ -1289,6 +1302,35 @@ function formatMatrixRow(row) {
   return row.map((v) => String(v).padStart(8)).join(' ');
 }
 
+function renderActivationRange(id, label, description, range, tone, disabled = false, channel = null, auxOptions = null) {
+  const start = clamp(Number(range?.[0]) || 900, 900, 2075);
+  const end = clamp(Number(range?.[1]) || 2100, start + 25, 2100);
+  const startPercent = ((start - 900) / 1200) * 100;
+  const endPercent = ((end - 900) / 1200) * 100;
+  const disabledAttribute = disabled ? 'disabled' : '';
+  return `
+    <div class="mode-range-card ${disabled ? 'is-disabled' : ''}" data-mode-range style="--range-color:${tone}; --range-start:${startPercent}%; --range-end:${endPercent}%">
+      <div class="mode-range-info">
+        <div class="mode-range-name"><span class="mode-dot"></span>${channel === null ? `<strong>${label}</strong>` : `<label class="arm-toggle"><input name="fc_${id}_enabled" data-mode-enabled type="checkbox" ${checked(!disabled)}><strong>${label}</strong></label>`}</div>
+        <span>${description}</span>
+        ${channel === null ? '' : `<label class="mode-channel"><span>${t('flight.modeChannel')}</span><select name="fc_${id}_channel" ${disabledAttribute}>${auxOptions(channel)}</select></label>`}
+      </div>
+      <div class="mode-range-control">
+        <div class="mode-range-values">
+          <label><span>${t('flight.rangeMin')}</span><span class="mode-value-input"><input data-range-number="start" type="number" min="900" max="2075" step="25" value="${start}" ${disabledAttribute}><small>&micro;s</small></span></label>
+          <span class="mode-range-separator">&ndash;</span>
+          <label><span>${t('flight.rangeMax')}</span><span class="mode-value-input"><input data-range-number="end" type="number" min="925" max="2100" step="25" value="${end}" ${disabledAttribute}><small>&micro;s</small></span></label>
+        </div>
+        <div class="mode-slider">
+          <div class="mode-slider-track"><span data-range-fill title="${t('flight.dragRange')}"></span></div>
+          <input name="fc_${id}_start" data-range-handle="start" type="range" min="900" max="2100" step="25" value="${start}" aria-label="${label} ${t('flight.rangeMin')}" ${disabledAttribute}>
+          <input name="fc_${id}_end" data-range-handle="end" type="range" min="900" max="2100" step="25" value="${end}" aria-label="${label} ${t('flight.rangeMax')}" ${disabledAttribute}>
+        </div>
+        <div class="mode-range-scale" aria-hidden="true"><span>900</span><span>1200</span><span>1500</span><span>1800</span><span>2100</span></div>
+      </div>
+    </div>`;
+}
+
 function boardPreviewTransform(roll, pitch, yaw) {
   // The board graphic draws FlightControl +X forward as the on-screen FW arrow.
   // Map preview rotations onto that frame: roll about forward, pitch about left,
@@ -1301,8 +1343,11 @@ function renderFlight() {
   const ratePid = configValue('fc_rate_pid', []);
   const anglePid = configValue('fc_angle_pid', []);
   const mixer = configValue('fc_mixer', []);
-  const angleEnabled = configValue('fc_angle_enabled', false);
+  const modeConditions = configValue('fc_mode_conditions', {rate: [6, 1300, 1700]});
   const armEnabled = configValue('fc_arm_enabled', false);
+  const armChannel = configValue('fc_arm_channel', 5);
+  const armRange = configValue('fc_arm_range', [1700, 2100]);
+  const auxOptions = (selectedChannel) => pwmInputLabels.slice(4).map((label, index) => `<option value="${index + 5}" ${selected(selectedChannel, index + 5)}>${label}</option>`).join('');
   const roll = state.eulerRoll ?? 0;
   const pitch = state.eulerPitch ?? 0;
   const yaw = state.eulerYaw ?? 0;
@@ -1316,16 +1361,30 @@ function renderFlight() {
     <section class="panel">
       <h2>${t('flight.heading')}</h2>
       <form id="flight-form">
-        <div class="check"><input id="fc_angle_enabled" name="fc_angle_enabled" type="checkbox" ${checked(angleEnabled)}><label for="fc_angle_enabled">${t('flight.angleEnabled')}</label></div>
-        <div class="check"><input id="fc_arm_enabled" name="fc_arm_enabled" type="checkbox" ${checked(armEnabled)}><label for="fc_arm_enabled">${t('flight.armEnabled')}</label></div>
+        <div class="mode-config">
+          <div class="mode-config-header">
+            <div><h3>${t('flight.modeRanges')}</h3><div class="helper">${t('flight.rangeHelp')}</div></div>
+          </div>
+          <div class="mode-range-list">
+            ${renderActivationRange('rate', 'RATE', t('flight.rateDescription'), modeConditions.rate?.slice(1) ?? [1300, 1700], '#2f80c4', !modeConditions.rate, modeConditions.rate?.[0] ?? 6, auxOptions)}
+            ${renderActivationRange('angle', 'ANGLE', t('flight.angleDescription'), modeConditions.angle?.slice(1) ?? [1700, 2100], '#1f8f75', !modeConditions.angle, modeConditions.angle?.[0] ?? 6, auxOptions)}
+          </div>
+        </div>
+        <div class="mode-config arm-config" id="arm-mode-config">
+          <div class="mode-config-header">
+            <label class="arm-toggle" for="fc_arm_enabled"><input id="fc_arm_enabled" name="fc_arm_enabled" type="checkbox" ${checked(armEnabled)}><span><strong>${t('flight.armEnabled')}</strong><small>${t('flight.armDescription')}</small></span></label>
+            <label class="mode-channel" for="fc_arm_channel"><span>${t('flight.armChannel')}</span><select id="fc_arm_channel" name="fc_arm_channel" ${armEnabled ? '' : 'disabled'}>${auxOptions(armChannel)}</select></label>
+          </div>
+          ${renderActivationRange('arm', 'ARM', t('flight.armRangeDescription'), armRange, '#d97706', !armEnabled)}
+        </div>
         <div class="notice">${t('notice.rateLoop')}</div>
         <div class="row">
           <label>${t('flight.ratePid')}</label>
           ${renderNumGrid('fc_rate_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], ratePid, {rowHeader: t('flight.axis')})}
         </div>
-        <div class="row" id="angle-pid-row" style="display:${angleEnabled ? 'grid' : 'none'};">
+        <div class="row" id="angle-pid-row">
           <label>${t('flight.anglePid')}</label>
-          ${renderNumGrid('fc_angle_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], anglePid, {rowHeader: t('flight.axis'), disabled: !angleEnabled})}
+          ${renderNumGrid('fc_angle_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], anglePid, {rowHeader: t('flight.axis')})}
         </div>
         <div class="row">
           <label>${t('flight.mixer')}</label>
@@ -1786,19 +1845,7 @@ function wireEvents() {
     syncModelId();
   }
 
-  const anglePidRow = document.querySelector('#angle-pid-row');
-  const angleEnabled = document.querySelector('#fc_angle_enabled');
-  if (anglePidRow && angleEnabled) {
-    const syncAnglePid = () => {
-      const enabled = angleEnabled.checked;
-      anglePidRow.style.display = enabled ? 'grid' : 'none';
-      anglePidRow.querySelectorAll('input').forEach((input) => {
-        input.disabled = !enabled;
-      });
-    };
-    angleEnabled.addEventListener('change', syncAnglePid);
-    syncAnglePid();
-  }
+  wireModeRangeEditors();
 
   syncBindingPreview();
   wireOrientationPreview();
@@ -1825,6 +1872,105 @@ function wireEvents() {
       if (action === 'force-cancel') forceUpdate('cancel');
     });
   });
+}
+
+function wireModeRangeEditors() {
+  const syncCard = (card, source = '') => {
+    const startSlider = card.querySelector('[data-range-handle="start"]');
+    const endSlider = card.querySelector('[data-range-handle="end"]');
+    const startNumber = card.querySelector('[data-range-number="start"]');
+    const endNumber = card.querySelector('[data-range-number="end"]');
+    if (!startSlider || !endSlider || !startNumber || !endNumber) return;
+
+    if (source === 'number-start' && startNumber.value !== '') startSlider.value = startNumber.value;
+    if (source === 'number-end' && endNumber.value !== '') endSlider.value = endNumber.value;
+
+    let start = clamp(intOrDefault(startSlider.value, 900), 900, 2075);
+    let end = clamp(intOrDefault(endSlider.value, 2100), 925, 2100);
+    if (start > end - 25) {
+      if (source.includes('start')) start = end - 25;
+      else end = start + 25;
+    }
+
+    startSlider.value = String(start);
+    endSlider.value = String(end);
+    startNumber.value = String(start);
+    endNumber.value = String(end);
+    card.style.setProperty('--range-start', `${((start - 900) / 1200) * 100}%`);
+    card.style.setProperty('--range-end', `${((end - 900) / 1200) * 100}%`);
+  };
+
+  document.querySelectorAll('[data-mode-range]').forEach((card) => {
+    const modeToggle = card.querySelector('[data-mode-enabled]');
+    if (modeToggle) {
+      const syncMode = () => {
+        const disabled = !modeToggle.checked;
+        card.classList.toggle('is-disabled', disabled);
+        card.querySelectorAll('select, [data-range-handle], [data-range-number]').forEach((input) => {
+          input.disabled = disabled;
+        });
+      };
+      modeToggle.addEventListener('change', syncMode);
+      syncMode();
+    }
+    card.querySelectorAll('[data-range-handle]').forEach((input) => {
+      input.addEventListener('input', () => syncCard(card, `slider-${input.dataset.rangeHandle}`));
+    });
+    card.querySelectorAll('[data-range-number]').forEach((input) => {
+      input.addEventListener('change', () => syncCard(card, `number-${input.dataset.rangeNumber}`));
+    });
+
+    const fill = card.querySelector('[data-range-fill]');
+    const startSlider = card.querySelector('[data-range-handle="start"]');
+    const endSlider = card.querySelector('[data-range-handle="end"]');
+    if (fill && startSlider && endSlider) {
+      fill.addEventListener('pointerdown', (event) => {
+        if (startSlider.disabled || endSlider.disabled) return;
+        event.preventDefault();
+        const initialX = event.clientX;
+        const initialStart = Number(startSlider.value);
+        const initialEnd = Number(endSlider.value);
+        const width = initialEnd - initialStart;
+        const trackWidth = fill.parentElement.getBoundingClientRect().width;
+        fill.setPointerCapture(event.pointerId);
+        fill.classList.add('is-dragging');
+
+        const moveRange = (moveEvent) => {
+          const rawDelta = ((moveEvent.clientX - initialX) / trackWidth) * 1200;
+          const delta = Math.round(rawDelta / 25) * 25;
+          const nextStart = clamp(initialStart + delta, 900, 2100 - width);
+          startSlider.value = String(nextStart);
+          endSlider.value = String(nextStart + width);
+          syncCard(card);
+        };
+        const stopDragging = () => {
+          fill.classList.remove('is-dragging');
+          fill.removeEventListener('pointermove', moveRange);
+          fill.removeEventListener('pointerup', stopDragging);
+          fill.removeEventListener('pointercancel', stopDragging);
+        };
+
+        fill.addEventListener('pointermove', moveRange);
+        fill.addEventListener('pointerup', stopDragging);
+        fill.addEventListener('pointercancel', stopDragging);
+      });
+    }
+    syncCard(card);
+  });
+
+  const armToggle = document.querySelector('#fc_arm_enabled');
+  const armConfig = document.querySelector('#arm-mode-config');
+  if (armToggle && armConfig) {
+    const syncArm = () => {
+      const disabled = !armToggle.checked;
+      armConfig.classList.toggle('is-disabled', disabled);
+      armConfig.querySelectorAll('select, [data-range-handle], [data-range-number]').forEach((input) => {
+        input.disabled = disabled;
+      });
+    };
+    armToggle.addEventListener('change', syncArm);
+    syncArm();
+  }
 }
 
 document.title = t('app.title');

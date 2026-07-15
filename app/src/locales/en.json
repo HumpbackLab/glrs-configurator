@@ -36,7 +36,7 @@
   },
   "notice": {
     "working": "Working...",
-    "rateLoop": "Rate loop is always active. Angle loop only applies when this switch is on."
+    "rateLoop": "MANUAL bypasses PID, RATE uses the rate loop, and ANGLE uses both angle and rate loops."
   },
   "status": {
     "device": "Device",
@@ -49,8 +49,8 @@
     "uidType": "UID Type",
     "modelId": "Model ID",
     "serialProtocol": "Serial Protocol",
-    "flightAngleLoop": "Flight Angle Loop",
-    "ch5MotorArm": "CH5 Motor Arm",
+    "modeChannel": "Mode Switch",
+    "armChannel": "ARM Switch",
     "gyro": "Gyro",
     "vbat": "VBAT"
   },
@@ -101,8 +101,20 @@
   },
   "flight": {
     "heading": "Flight Control",
-    "angleEnabled": "Angle loop enabled",
-    "armEnabled": "CH5 motor arm enabled",
+    "modeChannel": "AUX channel",
+    "modeRanges": "Mode activation conditions",
+    "rangeHelp": "RATE and ANGLE are optional independent AUX conditions and may share a channel. ANGLE wins if both are active; otherwise MANUAL is used.",
+    "rangeTo": "to",
+    "rangeMin": "Start",
+    "rangeMax": "End",
+    "dragRange": "Drag the entire range",
+    "manualDescription": "Direct control without PID",
+    "rateDescription": "Rate mode using the Rate PID",
+    "angleDescription": "Self-level mode using Angle and Rate PID",
+    "armEnabled": "Enable ARM switch",
+    "armChannel": "ARM AUX channel",
+    "armDescription": "Use a dedicated switch to arm the motors",
+    "armRangeDescription": "Armed while the channel is inside this range",
     "ratePid": "Rate PID",
     "anglePid": "Angle PID",
     "mixer": "Mixer",
@@ -186,6 +198,7 @@
     "setResult": "Board orientation set to roll={roll}, pitch={pitch}, yaw={yaw}. Press Save to write it."
   },
   "message": {
+    "invalidRange": "Invalid activation range",
     "connected": "Connected",
     "refreshed": "Refreshed",
     "rebootRequested": "Reboot requested",

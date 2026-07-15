@@ -36,7 +36,7 @@
   },
   "notice": {
     "working": "处理中...",
-    "rateLoop": "Rate 回路始终启用。Angle 回路仅在开关打开时生效。"
+    "rateLoop": "MANUAL 绕过 PID，RATE 使用角速度环，ANGLE 使用角度外环和角速度内环。"
   },
   "status": {
     "device": "设备",
@@ -49,8 +49,8 @@
     "uidType": "UID 类型",
     "modelId": "模型 ID",
     "serialProtocol": "串口协议",
-    "flightAngleLoop": "飞控角度回路",
-    "ch5MotorArm": "CH5 电机解锁",
+    "modeChannel": "模式开关",
+    "armChannel": "解锁开关",
     "gyro": "陀螺仪",
     "vbat": "电池电压"
   },
@@ -101,8 +101,20 @@
   },
   "flight": {
     "heading": "飞控",
-    "angleEnabled": "启用角度回路",
-    "armEnabled": "CH5 电机解锁启用",
+    "modeChannel": "AUX 通道",
+    "modeRanges": "模式激活条件",
+    "rangeHelp": "RATE 和 ANGLE 是可选的独立 AUX 激活条件，也可以共用通道。两者同时生效时 ANGLE 优先，否则自动使用 MANUAL。",
+    "rangeTo": "到",
+    "rangeMin": "起点",
+    "rangeMax": "终点",
+    "dragRange": "拖动整个区间",
+    "manualDescription": "直通控制，不经过 PID",
+    "rateDescription": "角速度模式，使用 Rate PID",
+    "angleDescription": "自稳模式，使用 Angle 与 Rate PID",
+    "armEnabled": "启用解锁开关",
+    "armChannel": "解锁 AUX 通道",
+    "armDescription": "使用独立开关控制电机解锁",
+    "armRangeDescription": "通道进入此区间时解锁",
     "ratePid": "Rate PID",
     "anglePid": "Angle PID",
     "mixer": "混控器",
@@ -186,6 +198,7 @@
     "setResult": "飞控安装角度已设为 roll={roll}, pitch={pitch}, yaw={yaw}。点击保存生效。"
   },
   "message": {
+    "invalidRange": "激活区间无效",
     "connected": "已连接",
     "refreshed": "已刷新",
     "rebootRequested": "已请求重启",
