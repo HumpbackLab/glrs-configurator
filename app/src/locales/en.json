@@ -39,7 +39,8 @@
     "downloadLatestFirmware": "Download Latest Firmware",
     "exportProfile": "Export Configuration",
     "importProfile": "Import Configuration",
-    "discardProfile": "Discard Imported Values"
+    "discardProfile": "Discard Imported Values",
+    "submitCommunity": "Submit to Community"
   },
   "notice": {
     "working": "Working...",
@@ -69,6 +70,28 @@
     "flightUnsaved": "Imported flight-control values are not saved. Review them, then press Save to write them to the receiver.",
     "targetWarning": "The profile target is {source}, while the connected target is {target}; review all values before saving.",
     "pwmPartialWarning": "The profile contains {source} PWM outputs; the remaining outputs on this {target}-output receiver were left unchanged."
+  },
+  "community": {
+    "heading": "Submit a Community Profile",
+    "description": "Choose a previously exported profile. Submission needs internet access but does not require a receiver connection.",
+    "profileFile": "Local profile file",
+    "selectProfileHint": "Choose a Gyro ELRS profile JSON file",
+    "profileSummary": "Target: {target} · PWM: {pwmOutputs} · Motors: {motors}",
+    "phone": "Phone number (optional)",
+    "phonePrivacy": "This will let a future user system associate the submitted profile with your account. It is never written to the public profile or GitHub PR. You may leave it blank for privacy, but you will not be able to claim this profile later.",
+    "title": "Profile name",
+    "summary": "Description (optional)",
+    "authorName": "Author nickname (optional)",
+    "vehicleType": "Vehicle type (optional)",
+    "vehicleNone": "Select",
+    "vehicleMultirotor": "Multirotor",
+    "vehicleFixedWing": "Fixed-wing",
+    "vehicleVtol": "VTOL",
+    "tags": "Tags (optional)",
+    "tagsPlaceholder": "fixed-wing, twin, stabilized",
+    "licenseNotice": "By submitting, you agree to publish this profile under the CC-BY-4.0 license.",
+    "submitting": "Submitting...",
+    "pendingReview": "Submission created and awaiting community review:"
   },
   "runtime": {
     "heading": "Runtime Options",
@@ -271,7 +294,8 @@
     "selectFirmware": "Select a firmware file first",
     "profileExported": "Configuration profile exported",
     "profileImported": "Profile imported into the forms. Nothing has been written to the receiver.",
-    "profileDiscarded": "Imported values discarded"
+    "profileDiscarded": "Imported values discarded",
+    "communitySubmitted": "Submission sent; review PR #{number} was created"
   },
   "error": {
     "timeout": "Timeout connecting to {host}",
@@ -295,8 +319,10 @@
     "profilePwmCount": "The profile has {source} PWM outputs, but this receiver only has {target}",
     "profilePwmMode": "PWM output {output} does not support mode {mode}",
     "profileFlightUnsupported": "The connected receiver does not expose flight-control settings",
-    "profileMixerLength": "Mixer must contain 1 to 8 rows of four values",
-    "profileOrientation": "Board orientation is not a valid rotation matrix"
+    "profileMixerLength": "Mixer must contain 0 to 8 rows of four values",
+    "profileOrientation": "Board orientation is not a valid rotation matrix",
+    "communityProfileRequired": "Choose a local profile file first",
+    "communityTimeout": "The community service timed out; restore internet access and try again"
   },
   "lang": {
     "label": "Language",

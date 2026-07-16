@@ -39,7 +39,8 @@
     "downloadLatestFirmware": "下载最新固件",
     "exportProfile": "导出配置",
     "importProfile": "导入配置",
-    "discardProfile": "放弃导入内容"
+    "discardProfile": "放弃导入内容",
+    "submitCommunity": "投稿到社区"
   },
   "notice": {
     "working": "处理中...",
@@ -69,6 +70,28 @@
     "flightUnsaved": "导入的飞控参数尚未保存。请检查后点击“保存”写入接收机。",
     "targetWarning": "配置来源目标为 {source}，当前连接目标为 {target}，保存前请仔细检查。",
     "pwmPartialWarning": "配置包含 {source} 路 PWM；当前接收机共有 {target} 路，其余输出保持不变。"
+  },
+  "community": {
+    "heading": "投稿配置到社区",
+    "description": "选择之前导出的配置文件。投稿需要互联网，但不需要连接接收机。",
+    "profileFile": "本地配置文件",
+    "selectProfileHint": "请选择 Gyro ELRS 配置 JSON",
+    "profileSummary": "目标：{target} · PWM：{pwmOutputs} · 电机：{motors}",
+    "phone": "手机号（选填）",
+    "phonePrivacy": "用于未来用户系统认领你投稿的配置。手机号不会写入公开配置或 GitHub PR；如果担心信息泄露可以留空，但后续将无法认领该配置。",
+    "title": "配置名称",
+    "summary": "配置简介（选填）",
+    "authorName": "作者昵称（选填）",
+    "vehicleType": "机型（选填）",
+    "vehicleNone": "请选择",
+    "vehicleMultirotor": "多旋翼",
+    "vehicleFixedWing": "固定翼",
+    "vehicleVtol": "垂起",
+    "tags": "Tags（选填）",
+    "tagsPlaceholder": "固定翼, 双发, 自稳",
+    "licenseNotice": "提交即表示你同意公开分享该配置，并以 CC-BY-4.0 许可发布。",
+    "submitting": "正在投稿...",
+    "pendingReview": "投稿已创建，等待社区审核："
   },
   "runtime": {
     "heading": "运行时选项",
@@ -271,7 +294,8 @@
     "selectFirmware": "请先选择固件文件",
     "profileExported": "配置文件已导出",
     "profileImported": "配置已导入表单，尚未向接收机写入任何内容。",
-    "profileDiscarded": "已放弃导入内容"
+    "profileDiscarded": "已放弃导入内容",
+    "communitySubmitted": "投稿已提交，审核 PR #{number} 已创建"
   },
   "error": {
     "timeout": "连接 {host} 超时",
@@ -295,8 +319,10 @@
     "profilePwmCount": "配置包含 {source} 路 PWM，但当前接收机只有 {target} 路",
     "profilePwmMode": "PWM 输出 {output} 不支持 {mode} 模式",
     "profileFlightUnsupported": "当前接收机未提供飞控配置",
-    "profileMixerLength": "混控器必须包含 1 到 8 行，每行四个值",
-    "profileOrientation": "飞控安装角不是有效的旋转矩阵"
+    "profileMixerLength": "混控器必须包含 0 到 8 行，每行四个值",
+    "profileOrientation": "飞控安装角不是有效的旋转矩阵",
+    "communityProfileRequired": "请先选择本地配置文件",
+    "communityTimeout": "连接社区服务超时，请确认已恢复互联网后重试"
   },
   "lang": {
     "label": "语言",

@@ -11,6 +11,7 @@ ELRS 飞控接收机配置工具。基于 Tauri v2 构建，支持 Windows、Lin
 - **MSP 调试** — 通过 TCP (端口 5761) 轮询姿态数据，支持 3D 飞机模型实时渲染
 - **WiFi 管理** — 家庭网络扫描与连接、AP/STA 模式切换
 - **固件更新** — 支持 LightFin Nano 在线版本检查与下载、OTA 固件上传与强制更新
+- **社区配置** — 导出本地 Profile，恢复互联网后选择文件并投稿到审核仓库
 
 应用与固件的发布、检查、下载和镜像机制详见 [GLRS 更新机制](docs/update-mechanism.md)。
 

@@ -9,6 +9,10 @@ const LOCAL_PROXY_PATH = '/__elrs_proxy__';
 const UPDATE_SOURCE_STORAGE_KEY = 'elrs-app-update-source';
 const PROFILE_FORMAT = 'gyro-elrs-profile';
 const PROFILE_VERSION = 1;
+const PROFILE_SUBMISSION_FORMAT = 'gyro-elrs-profile-submission';
+const PROFILE_SUBMISSION_VERSION = 1;
+const PROFILE_SUBMISSION_API = import.meta.env.VITE_PROFILE_SUBMISSION_URL
+  || 'https://gyro-elrs-profile-catalog.huangcmzzk.workers.dev/api/submissions';
 
 function defaultUpdateSource() {
   return getLocale() === 'zh-CN' ? 'gitee' : 'github';
@@ -65,6 +69,12 @@ const state = {
   debugPolling: false,
   debugPollRateHz: 20,
   profileDraft: null,
+  communitySubmission: {
+    open: false,
+    profile: null,
+    fileName: '',
+    result: null,
+  },
 };
 
 let debugPollTimer = null;
@@ -557,7 +567,7 @@ function renderNumGrid(prefix, rowLabels, colLabels, values, options = {}) {
   const note = options.note ? `<div class="helper">${escapeHtml(options.note)}</div>` : '';
   return `
     <div class="table-shell">
-      <table class="grid-table">
+      <table class="grid-table" data-grid-table="${escapeHtml(prefix)}">
         <thead>
           <tr>
             <th>${escapeHtml(options.rowHeader || '')}</th>
@@ -1453,7 +1463,7 @@ function validateProfile(profile) {
   if (profile.flight) {
     if (!Array.isArray(config().fc_rate_pid)) throw new Error(t('error.profileFlightUnsupported'));
     const mixer = profile.flight.mixer;
-    if (!Array.isArray(mixer) || mixer.length < 4 || mixer.length > 32 || mixer.length % 4 !== 0) {
+    if (!Array.isArray(mixer) || mixer.length > 32 || mixer.length % 4 !== 0) {
       throw new Error(t('error.profileMixerLength'));
     }
     mixer.forEach((value, index) => requireProfileNumber(value, `mixer[${index}]`, -1000, 1000));
@@ -1475,8 +1485,8 @@ function validateProfile(profile) {
       fc_arm_enabled: Boolean(arm.enabled),
       fc_arm_channel: requireProfileNumber(arm.channel ?? 5, 'ARM channel', 5, 16, true),
       fc_arm_range: validateProfileRange(arm.range, 'ARM range'),
-      fc_rate_pid: requireProfileArray(profile.flight.ratePid, 'Rate PID', 12, -32768, 32767, true),
-      fc_angle_pid: requireProfileArray(profile.flight.anglePid, 'Angle PID', 12, -32768, 32767, true),
+      fc_rate_pid: requireProfileArray(profile.flight.ratePid, 'Rate PID', 12, -327.68, 327.67),
+      fc_angle_pid: requireProfileArray(profile.flight.anglePid, 'Angle PID', 12, -327.68, 327.67),
       fc_mixer: mixer.map(Number),
       fc_mixer_count: mixer.length,
       fc_orientation: orientation,
@@ -1513,6 +1523,135 @@ function discardProfileDraft() {
   setMessage('ok', t('message.profileDiscarded'));
 }
 
+function communityProfileSummary(profile) {
+  return {
+    target: profile.compatibility?.target || t('value.unknown'),
+    pwmOutputs: Array.isArray(profile.pwm?.outputs) ? profile.pwm.outputs.length : 0,
+    motors: Array.isArray(profile.flight?.mixer) ? profile.flight.mixer.length / 4 : 0,
+  };
+}
+
+function validateCommunityProfile(profile) {
+  if (!profile || profile.format !== PROFILE_FORMAT) throw new Error(t('error.profileFormat'));
+  if (profile.version !== PROFILE_VERSION) throw new Error(t('error.profileVersion', {version: profile.version}));
+  if (!profile.pwm && !profile.flight) throw new Error(t('error.profileEmpty'));
+  return profile;
+}
+
+function openCommunitySubmission() {
+  state.communitySubmission = {open: true, profile: null, fileName: '', result: state.communitySubmission.result};
+  render();
+}
+
+function closeCommunitySubmission() {
+  state.communitySubmission = {...state.communitySubmission, open: false, profile: null, fileName: ''};
+  render();
+}
+
+async function selectCommunityProfile(file) {
+  if (!file) return;
+  let profile;
+  try {
+    profile = JSON.parse(await file.text());
+  } catch {
+    throw new Error(t('error.profileJson'));
+  }
+  validateCommunityProfile(profile);
+  state.communitySubmission.profile = profile;
+  state.communitySubmission.fileName = file.name;
+  const summary = communityProfileSummary(profile);
+  const preview = document.querySelector('#community-profile-preview');
+  if (preview) {
+    preview.className = 'submission-profile-preview ready';
+    preview.innerHTML = `<strong>${escapeHtml(file.name)}</strong><span>${escapeHtml(t('community.profileSummary', summary))}</span>`;
+  }
+}
+
+async function submitCommunityProfile(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const errorBox = form.querySelector('.submission-error');
+  const submitButton = form.querySelector('button[type="submit"]');
+  if (!state.communitySubmission.profile) {
+    errorBox.textContent = t('error.communityProfileRequired');
+    return;
+  }
+  const data = new FormData(form);
+  const vehicleTag = String(data.get('vehicleTag') || '').trim();
+  const customTags = String(data.get('tags') || '').split(/[,，]/).map((tag) => tag.trim()).filter(Boolean);
+  const tags = [...new Set([vehicleTag, ...customTags].filter(Boolean))];
+  const metadata = {
+    title: String(data.get('title') || '').trim(),
+    summary: String(data.get('summary') || '').trim(),
+    authorName: String(data.get('authorName') || '').trim(),
+    target: state.communitySubmission.profile.compatibility?.target || '',
+    tags,
+    license: 'CC-BY-4.0',
+  };
+  const body = {
+    format: PROFILE_SUBMISSION_FORMAT,
+    version: PROFILE_SUBMISSION_VERSION,
+    submittedAt: new Date().toISOString(),
+    metadata,
+    contact: {phone: String(data.get('phone') || '').trim()},
+    consent: {share: true, safetyAcknowledged: true},
+    profile: state.communitySubmission.profile,
+  };
+
+  errorBox.textContent = '';
+  submitButton.disabled = true;
+  submitButton.textContent = t('community.submitting');
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(PROFILE_SUBMISSION_API, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.message || `${response.status} ${response.statusText}`);
+    state.communitySubmission = {open: false, profile: null, fileName: '', result};
+    state.message = {type: 'ok', text: t('message.communitySubmitted', {number: result.pullRequestNumber})};
+    render();
+  } catch (error) {
+    errorBox.textContent = error.name === 'AbortError' ? t('error.communityTimeout') : (error.message || String(error));
+    submitButton.disabled = false;
+    submitButton.textContent = t('action.submitCommunity');
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function renderCommunitySubmission() {
+  if (!state.communitySubmission.open) return '';
+  return `
+    <div class="submission-modal" role="dialog" aria-modal="true" aria-labelledby="community-submission-title">
+      <section class="submission-dialog">
+        <div class="submission-dialog-heading">
+          <div><h2 id="community-submission-title">${t('community.heading')}</h2><div class="helper">${t('community.description')}</div></div>
+          <button class="icon-button" type="button" data-action="community-close" aria-label="${t('action.cancel')}">×</button>
+        </div>
+        <form id="community-submission-form">
+          <div class="row"><label for="community-profile-file">${t('community.profileFile')} *</label><input id="community-profile-file" name="profileFile" type="file" accept="application/json,.json" required></div>
+          <div id="community-profile-preview" class="submission-profile-preview">${t('community.selectProfileHint')}</div>
+          <div class="row"><label for="community-phone">${t('community.phone')}</label><input id="community-phone" name="phone" type="tel" autocomplete="tel" maxlength="32" placeholder="+86 138 0000 0000"><div class="helper">${t('community.phonePrivacy')}</div></div>
+          <div class="row"><label for="community-title">${t('community.title')} *</label><input id="community-title" name="title" minlength="3" maxlength="80" required></div>
+          <div class="row"><label for="community-summary">${t('community.summary')}</label><textarea id="community-summary" name="summary" maxlength="500"></textarea></div>
+          <div class="submission-fields">
+            <div class="row"><label for="community-author">${t('community.authorName')}</label><input id="community-author" name="authorName" maxlength="40"></div>
+            <div class="row"><label for="community-vehicle">${t('community.vehicleType')}</label><select id="community-vehicle" name="vehicleTag"><option value="">${t('community.vehicleNone')}</option><option value="multirotor">${t('community.vehicleMultirotor')}</option><option value="fixed-wing">${t('community.vehicleFixedWing')}</option><option value="vtol">${t('community.vehicleVtol')}</option></select></div>
+          </div>
+          <div class="row"><label for="community-tags">${t('community.tags')}</label><input id="community-tags" name="tags" maxlength="249" placeholder="${t('community.tagsPlaceholder')}"></div>
+          <div class="helper">${t('community.licenseNotice')}</div>
+          <div class="submission-error" role="alert"></div>
+          <div class="actions"><button class="primary" type="submit">${t('action.submitCommunity')}</button><button class="secondary" type="button" data-action="community-close">${t('action.cancel')}</button></div>
+        </form>
+      </section>
+    </div>`;
+}
+
 function renderStatus() {
   const c = config();
   const h = hardware();
@@ -1546,10 +1685,12 @@ function renderStatus() {
         <div class="actions">
           <button class="secondary" type="button" data-action="profile-export" ${profileCanExport() ? '' : 'disabled'}>${t('action.exportProfile')}</button>
           <button class="primary" type="button" data-action="profile-import" ${state.configResponse ? '' : 'disabled'}>${t('action.importProfile')}</button>
+          <button class="secondary" type="button" data-action="community-submit">${t('action.submitCommunity')}</button>
           ${state.profileDraft ? `<button class="danger" type="button" data-action="profile-discard">${t('action.discardProfile')}</button>` : ''}
         </div>
+        ${state.communitySubmission.result ? `<div class="notice community-result">${t('community.pendingReview')} <a href="${escapeHtml(state.communitySubmission.result.pullRequestUrl)}" target="_blank" rel="noopener">#${escapeHtml(state.communitySubmission.result.pullRequestNumber)}</a></div>` : ''}
       </section>
-    </div>`;
+    </div>${renderCommunitySubmission()}`;
 }
 
 function renderRuntime() {
@@ -1663,14 +1804,16 @@ function renderPwm() {
 
 function motorCount() {
   const mixerData = flightConfigValue('fc_mixer', []);
-  const configCount = flightConfigValue('fc_mixer_count', 0);
-  const base = configCount ? Math.floor(configCount / 4) : Math.max(1, Math.floor(mixerData.length / 4) || 1);
+  const configCount = flightConfigValue('fc_mixer_count', undefined);
+  const hasExplicitCount = Number.isFinite(Number(configCount));
+  const base = hasExplicitCount
+    ? Math.max(0, Math.floor(Number(configCount) / 4))
+    : Math.max(1, Math.floor(mixerData.length / 4) || 1);
   return base + (state.extraMixerRows || 0);
 }
 
 function changeMixerRowCount(delta) {
-  const mixerInput = document.querySelector('#flight-form [data-grid="fc_mixer"]');
-  const tbody = mixerInput?.closest('tbody');
+  const tbody = document.querySelector('#flight-form [data-grid-table="fc_mixer"] tbody');
   if (!tbody) return;
 
   if (delta > 0) {
@@ -2343,6 +2486,19 @@ function wireEvents() {
       setMessage('error', error.message || String(error));
     }
   });
+  document.querySelector('#community-profile-file')?.addEventListener('change', async (event) => {
+    const errorBox = document.querySelector('.submission-error');
+    try {
+      if (errorBox) errorBox.textContent = '';
+      await selectCommunityProfile(event.target.files?.[0]);
+    } catch (error) {
+      state.communitySubmission.profile = null;
+      state.communitySubmission.fileName = '';
+      if (errorBox) errorBox.textContent = error.message || String(error);
+      event.target.value = '';
+    }
+  });
+  document.querySelector('#community-submission-form')?.addEventListener('submit', submitCommunityProfile);
 
   const phraseInput = document.querySelector('#phrase');
   const vbindInput = document.querySelector('#vbind');
@@ -2411,6 +2567,8 @@ function wireEvents() {
       if (action === 'profile-export') exportProfile();
       if (action === 'profile-import') document.querySelector('#profile-file')?.click();
       if (action === 'profile-discard') discardProfileDraft();
+      if (action === 'community-submit') openCommunitySubmission();
+      if (action === 'community-close') closeCommunitySubmission();
     });
   });
 }
