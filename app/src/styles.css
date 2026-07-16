@@ -317,6 +317,16 @@ button:disabled {
   padding: 10px 12px;
 }
 
+.profile-panel .helper {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.profile-unsaved {
+  border-left: 4px solid #d97706;
+  margin-top: 14px;
+}
+
 .upload-progress {
   margin: 12px 0 4px;
 }

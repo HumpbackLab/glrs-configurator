@@ -36,7 +36,10 @@
     "checkUpdate": "Check for App Updates",
     "installUpdate": "Download and Install",
     "checkFirmwareUpdate": "Check for Firmware Updates",
-    "downloadLatestFirmware": "Download Latest Firmware"
+    "downloadLatestFirmware": "Download Latest Firmware",
+    "exportProfile": "Export Configuration",
+    "importProfile": "Import Configuration",
+    "discardProfile": "Discard Imported Values"
   },
   "notice": {
     "working": "Working...",
@@ -57,6 +60,15 @@
     "armChannel": "ARM Switch",
     "gyro": "Gyro",
     "vbat": "VBAT"
+  },
+  "profile": {
+    "heading": "Configuration Sharing",
+    "description": "Export or import PWM, mixer, PID and board orientation settings. Importing only fills the configurator forms and never writes to the receiver.",
+    "unsaved": "Imported values are staged in the configurator. Use the existing Save button on the PWM and Flight pages to write each section to the receiver.",
+    "pwmUnsaved": "Imported PWM values are not saved. Review them, then press Save to write them to the receiver.",
+    "flightUnsaved": "Imported flight-control values are not saved. Review them, then press Save to write them to the receiver.",
+    "targetWarning": "The profile target is {source}, while the connected target is {target}; review all values before saving.",
+    "pwmPartialWarning": "The profile contains {source} PWM outputs; the remaining outputs on this {target}-output receiver were left unchanged."
   },
   "runtime": {
     "heading": "Runtime Options",
@@ -256,7 +268,10 @@
     "uploadFinished": "Firmware upload finished",
     "forceConfirmed": "Forced update confirmed",
     "forceCancelled": "Forced update cancelled",
-    "selectFirmware": "Select a firmware file first"
+    "selectFirmware": "Select a firmware file first",
+    "profileExported": "Configuration profile exported",
+    "profileImported": "Profile imported into the forms. Nothing has been written to the receiver.",
+    "profileDiscarded": "Imported values discarded"
   },
   "error": {
     "timeout": "Timeout connecting to {host}",
@@ -269,7 +284,19 @@
     "invalidNumber": "{label}: invalid number at row {row}, column {col}",
     "validateArrayInvalid": "{label}: invalid number",
     "validateArrayLength": "{label}: expected {exactLength} values",
-    "validateArrayAlignment": "{label}: expected rows of {rowSize} values"
+    "validateArrayAlignment": "{label}: expected rows of {rowSize} values",
+    "profileJson": "The selected file is not valid JSON",
+    "profileFormat": "The selected file is not a Gyro ELRS configuration profile",
+    "profileVersion": "Unsupported configuration profile version: {version}",
+    "profileEmpty": "The configuration profile contains no PWM or flight-control settings",
+    "profileValue": "Invalid profile value: {label}",
+    "profileArrayLength": "{label}: expected {length} values",
+    "profilePwmUnsupported": "The connected receiver does not expose PWM outputs",
+    "profilePwmCount": "The profile has {source} PWM outputs, but this receiver only has {target}",
+    "profilePwmMode": "PWM output {output} does not support mode {mode}",
+    "profileFlightUnsupported": "The connected receiver does not expose flight-control settings",
+    "profileMixerLength": "Mixer must contain 1 to 8 rows of four values",
+    "profileOrientation": "Board orientation is not a valid rotation matrix"
   },
   "lang": {
     "label": "Language",

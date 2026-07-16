@@ -7,6 +7,8 @@ const DEFAULT_API = 'http://10.0.0.1';
 const API_STORAGE_KEY = 'elrs-local-rx-api';
 const LOCAL_PROXY_PATH = '/__elrs_proxy__';
 const UPDATE_SOURCE_STORAGE_KEY = 'elrs-app-update-source';
+const PROFILE_FORMAT = 'gyro-elrs-profile';
+const PROFILE_VERSION = 1;
 
 function defaultUpdateSource() {
   return getLocale() === 'zh-CN' ? 'gitee' : 'github';
@@ -62,6 +64,7 @@ const state = {
   debugError: '',
   debugPolling: false,
   debugPollRateHz: 20,
+  profileDraft: null,
 };
 
 let debugPollTimer = null;
@@ -436,7 +439,12 @@ function pwmConnected() {
 
 function pwmEntries() {
   const raw = Array.isArray(config().pwm) ? config().pwm : [];
-  if (raw.length > 0) return raw;
+  if (raw.length > 0) {
+    const imported = state.profileDraft?.pwm;
+    return raw.map((entry, index) => imported?.[index] === undefined
+      ? entry
+      : {...entry, config: imported[index]});
+  }
   // Offline fallback: 8 dummy channels with default 50Hz config for UI development
   if (!pwmConnected()) {
     const dummy = []; for (let i = 0; i < 8; i++) dummy.push({config: 0, pin: i + 2, features: 0});
@@ -651,11 +659,13 @@ async function loadDevice() {
   state.extraMixerRows = 0;
   state.originalUid = bytesToList(configResponse?.config?.uid);
   state.originalUidType = configResponse?.config?.uidtype || '';
-  const orient = (configResponse?.config?.fc_orientation || []).length === 9 ? configResponse.config.fc_orientation : [];
-  const [roll, pitch, yaw] = installEulerFromOrientationMatrix(orient);
-  state.eulerRoll = roll;
-  state.eulerPitch = pitch;
-  state.eulerYaw = yaw;
+  if (!state.profileDraft?.flight) {
+    const orient = (configResponse?.config?.fc_orientation || []).length === 9 ? configResponse.config.fc_orientation : [];
+    const [roll, pitch, yaw] = installEulerFromOrientationMatrix(orient);
+    state.eulerRoll = roll;
+    state.eulerPitch = pitch;
+    state.eulerYaw = yaw;
+  }
   if (!state.bindingPhrase) {
     state.bindingPhrase = '';
   }
@@ -664,6 +674,12 @@ async function loadDevice() {
 function configValue(key, fallback) {
   const value = config()[key];
   return value === undefined ? fallback : value;
+}
+
+function flightConfigValue(key, fallback) {
+  const draft = state.profileDraft?.flight;
+  if (draft && Object.hasOwn(draft, key)) return draft[key];
+  return configValue(key, fallback);
 }
 
 function optionValue(key, fallback) {
@@ -750,6 +766,11 @@ async function savePwm(event) {
 
   await runBusy(async () => {
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(payload)});
+    if (state.profileDraft) {
+      state.profileDraft.pwm = null;
+      state.profileDraft.serial1Protocol = null;
+      if (!state.profileDraft.flight) state.profileDraft = null;
+    }
     await loadDevice();
   }, t('message.pwmSaved'));
 }
@@ -780,6 +801,10 @@ async function saveFlight(event) {
     nextConfig.fc_orientation = orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw);
     delete nextConfig.pwm;
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(nextConfig)});
+    if (state.profileDraft) {
+      state.profileDraft.flight = null;
+      if (!state.profileDraft.pwm) state.profileDraft = null;
+    }
     state.extraMixerRows = 0;
     await loadDevice();
   }, t('message.flightSaved'));
@@ -1245,6 +1270,249 @@ function updateDebugAircraftAttitude(sample) {
   debugAircraftView.render();
 }
 
+function profilePwmOutputs() {
+  const form = document.querySelector('#pwm-form');
+  return pwmEntries().map((entry, index) => {
+    if (!form) return decodePwmConfig(entry.config);
+    return {
+      mode: intOrDefault(form.elements[`pwm-mode-${index}`]?.value, 0),
+      inputChannel: intOrDefault(form.elements[`pwm-input-${index}`]?.value, 0),
+      inverted: Boolean(form.elements[`pwm-invert-${index}`]?.checked),
+      signalPolarityInverted: Boolean(form.elements[`pwm-polarity-${index}`]?.checked),
+      narrow: Boolean(form.elements[`pwm-narrow-${index}`]?.checked),
+      failsafeMode: intOrDefault(form.elements[`pwm-failsafe-mode-${index}`]?.value, 0),
+      failsafe: intOrDefault(form.elements[`pwm-failsafe-${index}`]?.value, 1500),
+      mixerMode: intOrDefault(form.elements[`pwm-source-${index}`]?.value, 0) === 1,
+    };
+  });
+}
+
+function profileFlightConfig() {
+  const form = document.querySelector('#flight-form');
+  if (!form) {
+    return {
+      modeConditions: flightConfigValue('fc_mode_conditions', {}),
+      arm: {
+        enabled: flightConfigValue('fc_arm_enabled', false),
+        channel: flightConfigValue('fc_arm_channel', 5),
+        range: flightConfigValue('fc_arm_range', [1700, 2100]),
+      },
+      ratePid: flightConfigValue('fc_rate_pid', []),
+      anglePid: flightConfigValue('fc_angle_pid', []),
+      mixer: flightConfigValue('fc_mixer', []),
+      orientation: orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw),
+    };
+  }
+
+  const modeConditions = {};
+  ['rate', 'angle'].forEach((mode) => {
+    if (!form[`fc_${mode}_enabled`].checked) return;
+    modeConditions[mode] = [
+      intOrDefault(form[`fc_${mode}_channel`].value, 6),
+      intOrDefault(form[`fc_${mode}_start`].value, 0),
+      intOrDefault(form[`fc_${mode}_end`].value, 0),
+    ];
+  });
+  return {
+    modeConditions,
+    arm: {
+      enabled: form.fc_arm_enabled.checked,
+      channel: intOrDefault(form.fc_arm_channel.value, 5),
+      range: [
+        intOrDefault(form.fc_arm_start.value, 0),
+        intOrDefault(form.fc_arm_end.value, 0),
+      ],
+    },
+    ratePid: readNumGrid(form, 'fc_rate_pid', 3, 4),
+    anglePid: readNumGrid(form, 'fc_angle_pid', 3, 4),
+    mixer: readNumGrid(form, 'fc_mixer', motorCount(), 4),
+    orientation: orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw),
+  };
+}
+
+function buildProfile() {
+  const hasPwm = Array.isArray(config().pwm) && config().pwm.length > 0;
+  const outputs = hasPwm ? profilePwmOutputs() : [];
+  const hasFlight = Array.isArray(flightConfigValue('fc_rate_pid', undefined));
+  return {
+    format: PROFILE_FORMAT,
+    version: PROFILE_VERSION,
+    createdAt: new Date().toISOString(),
+    compatibility: {
+      target: state.target?.target || config().target || '',
+      productName: state.target?.product_name || config().product_name || '',
+      pwmOutputCount: outputs.length,
+    },
+    pwm: outputs.length ? {
+      outputs,
+      serial2Protocol: state.profileDraft?.serial1Protocol ?? configValue('serial1-protocol', 0),
+    } : null,
+    flight: hasFlight ? profileFlightConfig() : null,
+  };
+}
+
+function profileCanExport() {
+  return (Array.isArray(config().pwm) && config().pwm.length > 0)
+    || Array.isArray(flightConfigValue('fc_rate_pid', undefined));
+}
+
+function exportProfile() {
+  const profile = buildProfile();
+  const product = profile.compatibility.productName || profile.compatibility.target || 'receiver';
+  const safeName = product.replace(/[^a-z0-9._-]+/gi, '-').replace(/^-|-$/g, '') || 'receiver';
+  const blob = new Blob([JSON.stringify(profile, null, 2)], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${safeName}-profile.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  setMessage('ok', t('message.profileExported'));
+}
+
+function requireProfileNumber(value, label, min, max, integer = false) {
+  if (!Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value))) {
+    throw new Error(t('error.profileValue', {label}));
+  }
+  return value;
+}
+
+function requireProfileArray(value, label, length, min, max, integer = false) {
+  if (!Array.isArray(value) || value.length !== length) {
+    throw new Error(t('error.profileArrayLength', {label, length}));
+  }
+  return value.map((item, index) => requireProfileNumber(item, `${label}[${index}]`, min, max, integer));
+}
+
+function validateProfileRange(value, label) {
+  const range = requireProfileArray(value, label, 2, 900, 2100, true);
+  if (range[0] >= range[1]) throw new Error(t('error.profileValue', {label}));
+  return range;
+}
+
+function validateOrientationMatrix(matrix) {
+  const row = (index) => matrix.slice(index * 3, index * 3 + 3);
+  const dot = (a, b) => a.reduce((sum, value, index) => sum + value * b[index], 0);
+  const rows = [row(0), row(1), row(2)];
+  const determinant =
+    matrix[0] * (matrix[4] * matrix[8] - matrix[5] * matrix[7])
+    - matrix[1] * (matrix[3] * matrix[8] - matrix[5] * matrix[6])
+    + matrix[2] * (matrix[3] * matrix[7] - matrix[4] * matrix[6]);
+  const orthogonal = rows.every((current, index) =>
+    Math.abs(dot(current, current) - 1) < 0.03
+    && rows.every((other, otherIndex) => index === otherIndex || Math.abs(dot(current, other)) < 0.03));
+  if (!orthogonal || Math.abs(determinant - 1) >= 0.05) throw new Error(t('error.profileOrientation'));
+  return matrix;
+}
+
+function validateProfile(profile) {
+  if (!profile || profile.format !== PROFILE_FORMAT) throw new Error(t('error.profileFormat'));
+  if (profile.version !== PROFILE_VERSION) throw new Error(t('error.profileVersion', {version: profile.version}));
+  if (!profile.pwm && !profile.flight) throw new Error(t('error.profileEmpty'));
+
+  const draft = {pwm: null, serial1Protocol: null, flight: null};
+  const warnings = [];
+  const currentTarget = state.target?.target || config().target || '';
+  if (profile.compatibility?.target && currentTarget && profile.compatibility.target !== currentTarget) {
+    warnings.push(t('profile.targetWarning', {source: profile.compatibility.target, target: currentTarget}));
+  }
+
+  if (profile.pwm) {
+    const deviceEntries = Array.isArray(config().pwm) ? config().pwm : [];
+    if (!deviceEntries.length) throw new Error(t('error.profilePwmUnsupported'));
+    if (!Array.isArray(profile.pwm.outputs) || profile.pwm.outputs.length > deviceEntries.length) {
+      throw new Error(t('error.profilePwmCount', {source: profile.pwm.outputs?.length ?? 0, target: deviceEntries.length}));
+    }
+    const exclusive = new Set();
+    draft.pwm = profile.pwm.outputs.map((output, index) => {
+      const mode = requireProfileNumber(output?.mode, `PWM ${index + 1} mode`, 0, pwmModes.length - 1, true);
+      if (!pwmModeAllowed(Number(deviceEntries[index].features) || 0, mode)) {
+        throw new Error(t('error.profilePwmMode', {output: index + 1, mode: pwmModes[mode]}));
+      }
+      if (mode > 9) {
+        if (exclusive.has(mode)) throw new Error(t('error.pwmExclusive', {mode: pwmModes[mode], output: index + 1}));
+        exclusive.add(mode);
+      }
+      return encodePwmConfig({
+        mode,
+        inputChannel: requireProfileNumber(output.inputChannel, `PWM ${index + 1} inputChannel`, 0, 15, true),
+        inverted: Boolean(output.inverted),
+        signalPolarityInverted: Boolean(output.signalPolarityInverted),
+        narrow: Boolean(output.narrow),
+        failsafeMode: requireProfileNumber(output.failsafeMode, `PWM ${index + 1} failsafeMode`, 0, 2, true),
+        failsafe: requireProfileNumber(output.failsafe, `PWM ${index + 1} failsafe`, 988, 2011, true),
+        mixerMode: Boolean(output.mixerMode),
+      });
+    });
+    draft.serial1Protocol = requireProfileNumber(profile.pwm.serial2Protocol ?? 0, 'serial2Protocol', 0, serial1Protocols.length - 1, true);
+    if (draft.pwm.length < deviceEntries.length) {
+      warnings.push(t('profile.pwmPartialWarning', {source: draft.pwm.length, target: deviceEntries.length}));
+    }
+  }
+
+  if (profile.flight) {
+    if (!Array.isArray(config().fc_rate_pid)) throw new Error(t('error.profileFlightUnsupported'));
+    const mixer = profile.flight.mixer;
+    if (!Array.isArray(mixer) || mixer.length < 4 || mixer.length > 32 || mixer.length % 4 !== 0) {
+      throw new Error(t('error.profileMixerLength'));
+    }
+    mixer.forEach((value, index) => requireProfileNumber(value, `mixer[${index}]`, -1000, 1000));
+    const modeConditions = {};
+    for (const mode of ['rate', 'angle']) {
+      const condition = profile.flight.modeConditions?.[mode];
+      if (!condition) continue;
+      const values = requireProfileArray(condition, `${mode} condition`, 3, 0, 2100, true);
+      requireProfileNumber(values[0], `${mode} channel`, 5, 16, true);
+      validateProfileRange(values.slice(1), `${mode} range`);
+      modeConditions[mode] = values;
+    }
+    const arm = profile.flight.arm || {};
+    const orientation = validateOrientationMatrix(
+      requireProfileArray(profile.flight.orientation, 'orientation', 9, -1.1, 1.1),
+    );
+    draft.flight = {
+      fc_mode_conditions: modeConditions,
+      fc_arm_enabled: Boolean(arm.enabled),
+      fc_arm_channel: requireProfileNumber(arm.channel ?? 5, 'ARM channel', 5, 16, true),
+      fc_arm_range: validateProfileRange(arm.range, 'ARM range'),
+      fc_rate_pid: requireProfileArray(profile.flight.ratePid, 'Rate PID', 12, -32768, 32767, true),
+      fc_angle_pid: requireProfileArray(profile.flight.anglePid, 'Angle PID', 12, -32768, 32767, true),
+      fc_mixer: mixer.map(Number),
+      fc_mixer_count: mixer.length,
+      fc_orientation: orientation,
+    };
+  }
+  return {draft, warnings};
+}
+
+async function importProfileFile(file) {
+  if (!file) return;
+  let profile;
+  try {
+    profile = JSON.parse(await file.text());
+  } catch {
+    throw new Error(t('error.profileJson'));
+  }
+  const {draft, warnings} = validateProfile(profile);
+  state.profileDraft = draft;
+  state.extraMixerRows = 0;
+  if (draft.flight) {
+    [state.eulerRoll, state.eulerPitch, state.eulerYaw] = installEulerFromOrientationMatrix(draft.flight.fc_orientation);
+  }
+  state.message = {type: 'ok', text: warnings.length
+    ? `${t('message.profileImported')} ${warnings.join(' ')}`
+    : t('message.profileImported')};
+  render();
+}
+
+function discardProfileDraft() {
+  state.profileDraft = null;
+  state.extraMixerRows = 0;
+  const orientation = configValue('fc_orientation', []);
+  [state.eulerRoll, state.eulerPitch, state.eulerYaw] = installEulerFromOrientationMatrix(orientation);
+  setMessage('ok', t('message.profileDiscarded'));
+}
+
 function renderStatus() {
   const c = config();
   const h = hardware();
@@ -1269,6 +1537,17 @@ function renderStatus() {
         <h2>${t('status.sensors')}</h2>
         <div class="metric"><span>${t('status.gyro')}</span><strong>${state.target?.['has-gyro'] ? t('value.detected') : t('value.notDetected')}</strong></div>
         ${state.target?.['has-vbat'] ? `<div class="metric"><span>${t('status.vbat')}</span><strong>${(state.target['vbat-voltage'] * 0.01).toFixed(2)} V</strong></div>` : ''}
+      </section>
+      <section class="panel profile-panel">
+        <h2>${t('profile.heading')}</h2>
+        <div class="helper">${t('profile.description')}</div>
+        ${state.profileDraft ? `<div class="notice profile-unsaved">${t('profile.unsaved')}</div>` : ''}
+        <input id="profile-file" type="file" accept="application/json,.json" hidden>
+        <div class="actions">
+          <button class="secondary" type="button" data-action="profile-export" ${profileCanExport() ? '' : 'disabled'}>${t('action.exportProfile')}</button>
+          <button class="primary" type="button" data-action="profile-import" ${state.configResponse ? '' : 'disabled'}>${t('action.importProfile')}</button>
+          ${state.profileDraft ? `<button class="danger" type="button" data-action="profile-discard">${t('action.discardProfile')}</button>` : ''}
+        </div>
       </section>
     </div>`;
 }
@@ -1327,6 +1606,7 @@ function renderPwm() {
     <section class="panel">
       <h2>${t('pwm.heading')}</h2>
       ${offline ? `<div class="notice">${t('pwm.offlineNotice')}</div>` : ''}
+      ${state.profileDraft?.pwm ? `<div class="notice profile-unsaved">${t('profile.pwmUnsaved')}</div>` : ''}
       <div class="helper pwm-help">
         ${t('pwm.help.general')}
       </div>
@@ -1373,7 +1653,7 @@ function renderPwm() {
         </div>
         <div class="row" id="serial1-config-row" style="display:${serial2Visible ? 'grid' : 'none'};">
           <label for="serial1-protocol">${t('pwm.serial2Protocol')}</label>
-          <select id="serial1-protocol" name="serial1-protocol">${serial1Protocols.map(([value, label]) => `<option value="${value}" ${selected(configValue('serial1-protocol', 0), value)}>${label}</option>`).join('')}</select>
+          <select id="serial1-protocol" name="serial1-protocol">${serial1Protocols.map(([value, label]) => `<option value="${value}" ${selected(state.profileDraft?.serial1Protocol ?? configValue('serial1-protocol', 0), value)}>${label}</option>`).join('')}</select>
           <div class="helper">${t('pwm.help.serial2')}</div>
         </div>
         <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="refresh">${t('action.refresh')}</button></div>
@@ -1382,8 +1662,8 @@ function renderPwm() {
 }
 
 function motorCount() {
-  const mixerData = configValue('fc_mixer', []);
-  const configCount = configValue('fc_mixer_count', 0);
+  const mixerData = flightConfigValue('fc_mixer', []);
+  const configCount = flightConfigValue('fc_mixer_count', 0);
   const base = configCount ? Math.floor(configCount / 4) : Math.max(1, Math.floor(mixerData.length / 4) || 1);
   return base + (state.extraMixerRows || 0);
 }
@@ -1524,13 +1804,13 @@ function boardPreviewTransform(roll, pitch, yaw) {
 
 function renderFlight() {
   const motors = motorCount();
-  const ratePid = configValue('fc_rate_pid', []);
-  const anglePid = configValue('fc_angle_pid', []);
-  const mixer = configValue('fc_mixer', []);
-  const modeConditions = configValue('fc_mode_conditions', {rate: [6, 1300, 1700]});
-  const armEnabled = configValue('fc_arm_enabled', false);
-  const armChannel = configValue('fc_arm_channel', 5);
-  const armRange = configValue('fc_arm_range', [1700, 2100]);
+  const ratePid = flightConfigValue('fc_rate_pid', []);
+  const anglePid = flightConfigValue('fc_angle_pid', []);
+  const mixer = flightConfigValue('fc_mixer', []);
+  const modeConditions = flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 1700]});
+  const armEnabled = flightConfigValue('fc_arm_enabled', false);
+  const armChannel = flightConfigValue('fc_arm_channel', 5);
+  const armRange = flightConfigValue('fc_arm_range', [1700, 2100]);
   const auxOptions = (selectedChannel) => pwmInputLabels.slice(4).map((label, index) => `<option value="${index + 5}" ${selected(selectedChannel, index + 5)}>${label}</option>`).join('');
   const roll = state.eulerRoll ?? 0;
   const pitch = state.eulerPitch ?? 0;
@@ -1544,6 +1824,7 @@ function renderFlight() {
   return `
     <section class="panel">
       <h2>${t('flight.heading')}</h2>
+      ${state.profileDraft?.flight ? `<div class="notice profile-unsaved">${t('profile.flightUnsaved')}</div>` : ''}
       <form id="flight-form">
         <div class="mode-config">
           <div class="mode-config-header">
@@ -2055,6 +2336,13 @@ function wireEvents() {
   document.querySelector('#hardware-form')?.addEventListener('submit', saveHardwareJson);
   document.querySelector('#wifi-form')?.addEventListener('submit', saveHomeNetwork);
   document.querySelector('#update-form')?.addEventListener('submit', uploadFirmware);
+  document.querySelector('#profile-file')?.addEventListener('change', async (event) => {
+    try {
+      await importProfileFile(event.target.files?.[0]);
+    } catch (error) {
+      setMessage('error', error.message || String(error));
+    }
+  });
 
   const phraseInput = document.querySelector('#phrase');
   const vbindInput = document.querySelector('#vbind');
@@ -2120,6 +2408,9 @@ function wireEvents() {
       if (action === 'app-update-install') installAppUpdate();
       if (action === 'firmware-update-check') checkFirmwareUpdate();
       if (action === 'firmware-update-download') downloadFirmwareUpdate();
+      if (action === 'profile-export') exportProfile();
+      if (action === 'profile-import') document.querySelector('#profile-file')?.click();
+      if (action === 'profile-discard') discardProfileDraft();
     });
   });
 }
@@ -2224,6 +2515,11 @@ function wireModeRangeEditors() {
 }
 
 document.title = t('app.title');
+window.addEventListener('beforeunload', (event) => {
+  if (!state.profileDraft) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
 render();
 runBusy(loadDevice, t('message.connected'));
 if (isTauriApp()) checkAppUpdate();

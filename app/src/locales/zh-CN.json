@@ -36,7 +36,10 @@
     "checkUpdate": "检查应用更新",
     "installUpdate": "下载并安装",
     "checkFirmwareUpdate": "检查固件更新",
-    "downloadLatestFirmware": "下载最新固件"
+    "downloadLatestFirmware": "下载最新固件",
+    "exportProfile": "导出配置",
+    "importProfile": "导入配置",
+    "discardProfile": "放弃导入内容"
   },
   "notice": {
     "working": "处理中...",
@@ -57,6 +60,15 @@
     "armChannel": "解锁开关",
     "gyro": "陀螺仪",
     "vbat": "电池电压"
+  },
+  "profile": {
+    "heading": "配置分享",
+    "description": "导出或导入 PWM、混控器、PID 和飞控安装角。导入只会填写配置器表单，绝不会直接写入接收机。",
+    "unsaved": "导入值暂存在配置器中。请前往 PWM 和飞控页面检查，并分别点击现有的“保存”按钮写入接收机。",
+    "pwmUnsaved": "导入的 PWM 参数尚未保存。请检查后点击“保存”写入接收机。",
+    "flightUnsaved": "导入的飞控参数尚未保存。请检查后点击“保存”写入接收机。",
+    "targetWarning": "配置来源目标为 {source}，当前连接目标为 {target}，保存前请仔细检查。",
+    "pwmPartialWarning": "配置包含 {source} 路 PWM；当前接收机共有 {target} 路，其余输出保持不变。"
   },
   "runtime": {
     "heading": "运行时选项",
@@ -256,7 +268,10 @@
     "uploadFinished": "固件上传完成",
     "forceConfirmed": "已确认强制更新",
     "forceCancelled": "已取消强制更新",
-    "selectFirmware": "请先选择固件文件"
+    "selectFirmware": "请先选择固件文件",
+    "profileExported": "配置文件已导出",
+    "profileImported": "配置已导入表单，尚未向接收机写入任何内容。",
+    "profileDiscarded": "已放弃导入内容"
   },
   "error": {
     "timeout": "连接 {host} 超时",
@@ -269,7 +284,19 @@
     "invalidNumber": "{label}: row={row}, col={col} 数值无效",
     "validateArrayInvalid": "{label}: 无效数值",
     "validateArrayLength": "{label}: 需要 {exactLength} 个值",
-    "validateArrayAlignment": "{label}: 每行需要 {rowSize} 个值"
+    "validateArrayAlignment": "{label}: 每行需要 {rowSize} 个值",
+    "profileJson": "所选文件不是有效的 JSON",
+    "profileFormat": "所选文件不是 Gyro ELRS 配置文件",
+    "profileVersion": "不支持的配置文件版本：{version}",
+    "profileEmpty": "配置文件不包含 PWM 或飞控参数",
+    "profileValue": "配置值无效：{label}",
+    "profileArrayLength": "{label}：应包含 {length} 个值",
+    "profilePwmUnsupported": "当前接收机未提供 PWM 输出配置",
+    "profilePwmCount": "配置包含 {source} 路 PWM，但当前接收机只有 {target} 路",
+    "profilePwmMode": "PWM 输出 {output} 不支持 {mode} 模式",
+    "profileFlightUnsupported": "当前接收机未提供飞控配置",
+    "profileMixerLength": "混控器必须包含 1 到 8 行，每行四个值",
+    "profileOrientation": "飞控安装角不是有效的旋转矩阵"
   },
   "lang": {
     "label": "语言",
