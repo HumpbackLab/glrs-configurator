@@ -69,6 +69,9 @@ const state = {
   debugPolling: false,
   debugPollRateHz: 20,
   profileDraft: null,
+  profileOriginal: null,
+  profileCompatibility: null,
+  profileImportError: '',
   communitySubmission: {
     open: false,
     profile: null,
@@ -455,6 +458,9 @@ function pwmEntries() {
       ? entry
       : {...entry, config: imported[index]});
   }
+  if (state.profileDraft?.pwm) {
+    return state.profileDraft.pwm.map((configValue, index) => ({config: configValue, pin: index + 1, features: 127}));
+  }
   // Offline fallback: 8 dummy channels with default 50Hz config for UI development
   if (!pwmConnected()) {
     const dummy = []; for (let i = 0; i < 8; i++) dummy.push({config: 0, pin: i + 2, features: 0});
@@ -669,6 +675,18 @@ async function loadDevice() {
   state.extraMixerRows = 0;
   state.originalUid = bytesToList(configResponse?.config?.uid);
   state.originalUidType = configResponse?.config?.uidtype || '';
+  if (state.profileOriginal) {
+    try {
+      const {draft} = validateProfile(state.profileOriginal, {deviceAware: true});
+      state.profileDraft = draft;
+      state.profileImportError = '';
+      if (draft.flight) {
+        [state.eulerRoll, state.eulerPitch, state.eulerYaw] = installEulerFromOrientationMatrix(draft.flight.fc_orientation);
+      }
+    } catch (error) {
+      state.profileImportError = error.message || String(error);
+    }
+  }
   if (!state.profileDraft?.flight) {
     const orient = (configResponse?.config?.fc_orientation || []).length === 9 ? configResponse.config.fc_orientation : [];
     const [roll, pitch, yaw] = installEulerFromOrientationMatrix(orient);
@@ -739,6 +757,10 @@ async function saveModel(event) {
 async function savePwm(event) {
   event.preventDefault();
   if (!pwmConnected()) return;
+  if (state.profileImportError) {
+    setMessage('error', state.profileImportError);
+    return;
+  }
   const form = event.currentTarget;
   const entries = pwmEntries();
   const usedExclusiveModes = new Map();
@@ -781,12 +803,18 @@ async function savePwm(event) {
       state.profileDraft.serial1Protocol = null;
       if (!state.profileDraft.flight) state.profileDraft = null;
     }
+    markProfileSectionApplied('pwm');
     await loadDevice();
   }, t('message.pwmSaved'));
 }
 
 async function saveFlight(event) {
   event.preventDefault();
+  if (!state.target) return;
+  if (state.profileImportError) {
+    setMessage('error', state.profileImportError);
+    return;
+  }
   const form = event.currentTarget;
   const nextConfig = {...config()};
   await runBusy(async () => {
@@ -815,6 +843,7 @@ async function saveFlight(event) {
       state.profileDraft.flight = null;
       if (!state.profileDraft.pwm) state.profileDraft = null;
     }
+    markProfileSectionApplied('flight');
     state.extraMixerRows = 0;
     await loadDevice();
   }, t('message.flightSaved'));
@@ -1341,7 +1370,8 @@ function profileFlightConfig() {
 }
 
 function buildProfile() {
-  const hasPwm = Array.isArray(config().pwm) && config().pwm.length > 0;
+  const hasPwm = Boolean(state.profileDraft?.pwm?.length)
+    || (Array.isArray(config().pwm) && config().pwm.length > 0);
   const outputs = hasPwm ? profilePwmOutputs() : [];
   const hasFlight = Array.isArray(flightConfigValue('fc_rate_pid', undefined));
   return {
@@ -1349,8 +1379,8 @@ function buildProfile() {
     version: PROFILE_VERSION,
     createdAt: new Date().toISOString(),
     compatibility: {
-      target: state.target?.target || config().target || '',
-      productName: state.target?.product_name || config().product_name || '',
+      target: state.target?.target || config().target || state.profileCompatibility?.target || '',
+      productName: state.target?.product_name || config().product_name || state.profileCompatibility?.productName || '',
       pwmOutputCount: outputs.length,
     },
     pwm: outputs.length ? {
@@ -1362,7 +1392,8 @@ function buildProfile() {
 }
 
 function profileCanExport() {
-  return (Array.isArray(config().pwm) && config().pwm.length > 0)
+  return Boolean(state.profileDraft?.pwm?.length)
+    || (Array.isArray(config().pwm) && config().pwm.length > 0)
     || Array.isArray(flightConfigValue('fc_rate_pid', undefined));
 }
 
@@ -1415,7 +1446,7 @@ function validateOrientationMatrix(matrix) {
   return matrix;
 }
 
-function validateProfile(profile) {
+function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} = {}) {
   if (!profile || profile.format !== PROFILE_FORMAT) throw new Error(t('error.profileFormat'));
   if (profile.version !== PROFILE_VERSION) throw new Error(t('error.profileVersion', {version: profile.version}));
   if (!profile.pwm && !profile.flight) throw new Error(t('error.profileEmpty'));
@@ -1429,14 +1460,15 @@ function validateProfile(profile) {
 
   if (profile.pwm) {
     const deviceEntries = Array.isArray(config().pwm) ? config().pwm : [];
-    if (!deviceEntries.length) throw new Error(t('error.profilePwmUnsupported'));
-    if (!Array.isArray(profile.pwm.outputs) || profile.pwm.outputs.length > deviceEntries.length) {
-      throw new Error(t('error.profilePwmCount', {source: profile.pwm.outputs?.length ?? 0, target: deviceEntries.length}));
+    if (deviceAware && !deviceEntries.length) throw new Error(t('error.profilePwmUnsupported'));
+    const maximumOutputs = deviceAware ? deviceEntries.length : 16;
+    if (!Array.isArray(profile.pwm.outputs) || profile.pwm.outputs.length < 1 || profile.pwm.outputs.length > maximumOutputs) {
+      throw new Error(t('error.profilePwmCount', {source: profile.pwm.outputs?.length ?? 0, target: maximumOutputs}));
     }
     const exclusive = new Set();
     draft.pwm = profile.pwm.outputs.map((output, index) => {
       const mode = requireProfileNumber(output?.mode, `PWM ${index + 1} mode`, 0, pwmModes.length - 1, true);
-      if (!pwmModeAllowed(Number(deviceEntries[index].features) || 0, mode)) {
+      if (deviceAware && !pwmModeAllowed(Number(deviceEntries[index].features) || 0, mode)) {
         throw new Error(t('error.profilePwmMode', {output: index + 1, mode: pwmModes[mode]}));
       }
       if (mode > 9) {
@@ -1455,13 +1487,13 @@ function validateProfile(profile) {
       });
     });
     draft.serial1Protocol = requireProfileNumber(profile.pwm.serial2Protocol ?? 0, 'serial2Protocol', 0, serial1Protocols.length - 1, true);
-    if (draft.pwm.length < deviceEntries.length) {
+    if (deviceAware && draft.pwm.length < deviceEntries.length) {
       warnings.push(t('profile.pwmPartialWarning', {source: draft.pwm.length, target: deviceEntries.length}));
     }
   }
 
   if (profile.flight) {
-    if (!Array.isArray(config().fc_rate_pid)) throw new Error(t('error.profileFlightUnsupported'));
+    if (deviceAware && !Array.isArray(config().fc_rate_pid)) throw new Error(t('error.profileFlightUnsupported'));
     const mixer = profile.flight.mixer;
     if (!Array.isArray(mixer) || mixer.length > 32 || mixer.length % 4 !== 0) {
       throw new Error(t('error.profileMixerLength'));
@@ -1505,6 +1537,9 @@ async function importProfileFile(file) {
   }
   const {draft, warnings} = validateProfile(profile);
   state.profileDraft = draft;
+  state.profileOriginal = structuredClone(profile);
+  state.profileCompatibility = structuredClone(profile.compatibility || {});
+  state.profileImportError = '';
   state.extraMixerRows = 0;
   if (draft.flight) {
     [state.eulerRoll, state.eulerPitch, state.eulerYaw] = installEulerFromOrientationMatrix(draft.flight.fc_orientation);
@@ -1517,10 +1552,23 @@ async function importProfileFile(file) {
 
 function discardProfileDraft() {
   state.profileDraft = null;
+  state.profileOriginal = null;
+  state.profileCompatibility = null;
+  state.profileImportError = '';
   state.extraMixerRows = 0;
   const orientation = configValue('fc_orientation', []);
   [state.eulerRoll, state.eulerPitch, state.eulerYaw] = installEulerFromOrientationMatrix(orientation);
   setMessage('ok', t('message.profileDiscarded'));
+}
+
+function markProfileSectionApplied(section) {
+  if (!state.profileOriginal) return;
+  state.profileOriginal[section] = null;
+  state.profileImportError = '';
+  if (!state.profileOriginal.pwm && !state.profileOriginal.flight) {
+    state.profileOriginal = null;
+    state.profileCompatibility = null;
+  }
 }
 
 function communityProfileSummary(profile) {
@@ -1680,11 +1728,12 @@ function renderStatus() {
       <section class="panel profile-panel">
         <h2>${t('profile.heading')}</h2>
         <div class="helper">${t('profile.description')}</div>
-        ${state.profileDraft ? `<div class="notice profile-unsaved">${t('profile.unsaved')}</div>` : ''}
+        ${state.profileDraft ? `<div class="notice profile-unsaved">${state.target ? t('profile.unsaved') : t('profile.offlineReady')}</div>` : ''}
+        ${state.profileImportError ? `<div class="message error">${escapeHtml(t('profile.deviceIncompatible', {message: state.profileImportError}))}</div>` : ''}
         <input id="profile-file" type="file" accept="application/json,.json" hidden>
         <div class="actions">
           <button class="secondary" type="button" data-action="profile-export" ${profileCanExport() ? '' : 'disabled'}>${t('action.exportProfile')}</button>
-          <button class="primary" type="button" data-action="profile-import" ${state.configResponse ? '' : 'disabled'}>${t('action.importProfile')}</button>
+          <button class="primary" type="button" data-action="profile-import">${t('action.importProfile')}</button>
           <button class="secondary" type="button" data-action="community-submit">${t('action.submitCommunity')}</button>
           ${state.profileDraft ? `<button class="danger" type="button" data-action="profile-discard">${t('action.discardProfile')}</button>` : ''}
         </div>
@@ -1797,7 +1846,7 @@ function renderPwm() {
           <select id="serial1-protocol" name="serial1-protocol">${serial1Protocols.map(([value, label]) => `<option value="${value}" ${selected(state.profileDraft?.serial1Protocol ?? configValue('serial1-protocol', 0), value)}>${label}</option>`).join('')}</select>
           <div class="helper">${t('pwm.help.serial2')}</div>
         </div>
-        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="refresh">${t('action.refresh')}</button></div>
+        <div class="actions"><button class="primary" ${state.busy || offline || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="refresh">${t('action.refresh')}</button></div>
       </form>
     </section>`;
 }
@@ -2046,7 +2095,7 @@ function renderFlight() {
             </div>
           </div>
         </div>
-        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot">${t('action.reboot')}</button></div>
+        <div class="actions"><button class="primary" ${state.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot">${t('action.reboot')}</button></div>
       </form>
     </section>`;
 }

@@ -66,6 +66,8 @@
     "heading": "Configuration Sharing",
     "description": "Export or import PWM, mixer, PID and board orientation settings. Importing only fills the configurator forms and never writes to the receiver.",
     "unsaved": "Imported values are staged in the configurator. Use the existing Save button on the PWM and Flight pages to write each section to the receiver.",
+    "offlineReady": "The profile is loaded offline and can be viewed or exported again. Connect a receiver before saving.",
+    "deviceIncompatible": "This profile cannot be written to the connected device: {message}",
     "pwmUnsaved": "Imported PWM values are not saved. Review them, then press Save to write them to the receiver.",
     "flightUnsaved": "Imported flight-control values are not saved. Review them, then press Save to write them to the receiver.",
     "targetWarning": "The profile target is {source}, while the connected target is {target}; review all values before saving.",
@@ -118,7 +120,7 @@
     "heading": "PWM Output",
     "headingShort": "PWM",
     "noPwmNotice": "This target does not expose PWM outputs through <code>/config</code>.",
-    "offlineNotice": "Not connected to a device. Showing offline preview with default values.",
+    "offlineNotice": "Not connected to a device. This is an offline preview; connect a receiver before saving.",
     "help": {
       "general": "Configure each receiver output pin mode, source channel, inversion, pulse width and failsafe. <code>Invert</code> mirrors the control value around <code>1500us</code>. <code>Polarity</code> stores the raw signal-polarity flag; whether it has an effect depends on the current platform and output mode. Modes above <code>Serial RX/TX</code> are exclusive and can only be assigned once.",
       "serial2": "Shown when any output is assigned to <code>Serial2 TX</code>."

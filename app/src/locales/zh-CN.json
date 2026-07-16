@@ -66,6 +66,8 @@
     "heading": "配置分享",
     "description": "导出或导入 PWM、混控器、PID 和飞控安装角。导入只会填写配置器表单，绝不会直接写入接收机。",
     "unsaved": "导入值暂存在配置器中。请前往 PWM 和飞控页面检查，并分别点击现有的“保存”按钮写入接收机。",
+    "offlineReady": "配置已在离线模式中载入，可以查看或再次导出；连接接收机后才可保存。",
+    "deviceIncompatible": "该配置不能写入当前设备：{message}",
     "pwmUnsaved": "导入的 PWM 参数尚未保存。请检查后点击“保存”写入接收机。",
     "flightUnsaved": "导入的飞控参数尚未保存。请检查后点击“保存”写入接收机。",
     "targetWarning": "配置来源目标为 {source}，当前连接目标为 {target}，保存前请仔细检查。",
@@ -118,7 +120,7 @@
     "heading": "PWM 输出",
     "headingShort": "PWM",
     "noPwmNotice": "此目标未通过 <code>/config</code> 暴露 PWM 输出。",
-    "offlineNotice": "未连接设备。显示离线预览（默认值）。",
+    "offlineNotice": "未连接设备。当前为离线预览，连接接收机后才可保存。",
     "help": {
       "general": "配置各接收机输出引脚的通道模式、输入来源、反转、脉冲宽度和失控保护。<code>Invert</code> 将控制值以 <code>1500us</code> 为中心镜像。<code>Polarity</code> 存储原始信号极性标志，实际效果取决于当前平台和输出模式。比 <code>Serial RX/TX</code> 更高的模式为独占模式，只能分配给一个输出。",
       "serial2": "当有输出被分配给 <code>Serial2 TX</code> 时显示。"
