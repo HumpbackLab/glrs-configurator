@@ -40,7 +40,10 @@
     "exportProfile": "导出配置",
     "importProfile": "导入配置",
     "discardProfile": "放弃导入内容",
-    "submitCommunity": "投稿到社区"
+    "submitCommunity": "投稿到社区",
+    "browseCommunity": "浏览社区配置",
+    "downloadCommunityProfile": "下载配置",
+    "importCommunityProfile": "直接导入"
   },
   "notice": {
     "working": "处理中...",
@@ -93,7 +96,25 @@
     "tagsPlaceholder": "固定翼, 双发, 自稳",
     "licenseNotice": "提交即表示你同意公开分享该配置，并以 CC-BY-4.0 许可发布。",
     "submitting": "正在投稿...",
-    "pendingReview": "投稿已创建，等待社区审核："
+    "pendingReview": "投稿已创建，等待社区审核：",
+    "catalog": {
+      "heading": "社区配置",
+      "description": "浏览已经审核通过的配置。下载会保存为本地 Profile JSON；直接导入只填充当前表单，不会写入接收机。",
+      "loading": "正在获取社区配置目录…",
+      "loadingProfile": "正在获取…",
+      "retry": "重试",
+      "refresh": "刷新",
+      "searchPlaceholder": "搜索名称、作者、目标或 Tag",
+      "allVehicles": "全部机型",
+      "resultCount": "{count} 个配置",
+      "updatedAt": "目录更新：{date}",
+      "empty": "没有找到符合条件的社区配置。",
+      "compatible": "当前目标",
+      "target": "目标",
+      "pwm": "PWM",
+      "motors": "电机",
+      "replaceDraftConfirm": "当前有尚未保存的导入内容。继续将用社区配置覆盖这些表单草稿，是否继续？"
+    }
   },
   "runtime": {
     "heading": "运行时选项",
@@ -297,7 +318,8 @@
     "profileExported": "配置文件已导出",
     "profileImported": "配置已导入表单，尚未向接收机写入任何内容。",
     "profileDiscarded": "已放弃导入内容",
-    "communitySubmitted": "投稿已提交，审核 PR #{number} 已创建"
+    "communitySubmitted": "投稿已提交，审核 PR #{number} 已创建",
+    "communityProfileDownloaded": "已下载社区配置：{title}"
   },
   "error": {
     "timeout": "连接 {host} 超时",
@@ -324,7 +346,14 @@
     "profileMixerLength": "混控器必须包含 0 到 8 行，每行四个值",
     "profileOrientation": "飞控安装角不是有效的旋转矩阵",
     "communityProfileRequired": "请先选择本地配置文件",
-    "communityTimeout": "连接社区服务超时，请确认已恢复互联网后重试"
+    "communityTimeout": "连接社区服务超时，请确认已恢复互联网后重试",
+    "communityCatalogInvalid": "社区目录格式无效",
+    "communityCatalogTimeout": "获取社区目录超时，请检查互联网连接",
+    "communityProfileOrigin": "社区配置下载地址不受信任",
+    "communityProfileTooLarge": "社区配置文件过大",
+    "communityProfileIntegrity": "社区配置 SHA-256 校验失败，请刷新目录后重试",
+    "communityProfileInvalid": "社区配置文件与目录信息不一致",
+    "communityProfileTimeout": "下载社区配置超时，请检查互联网连接"
   },
   "lang": {
     "label": "语言",

@@ -40,7 +40,10 @@
     "exportProfile": "Export Configuration",
     "importProfile": "Import Configuration",
     "discardProfile": "Discard Imported Values",
-    "submitCommunity": "Submit to Community"
+    "submitCommunity": "Submit to Community",
+    "browseCommunity": "Browse Community Profiles",
+    "downloadCommunityProfile": "Download",
+    "importCommunityProfile": "Import into Forms"
   },
   "notice": {
     "working": "Working...",
@@ -93,7 +96,25 @@
     "tagsPlaceholder": "fixed-wing, twin, stabilized",
     "licenseNotice": "By submitting, you agree to publish this profile under the CC-BY-4.0 license.",
     "submitting": "Submitting...",
-    "pendingReview": "Submission created and awaiting community review:"
+    "pendingReview": "Submission created and awaiting community review:",
+    "catalog": {
+      "heading": "Community Profiles",
+      "description": "Browse approved profiles. Download saves a reusable Profile JSON; direct import only fills the current forms and never writes to the receiver.",
+      "loading": "Loading the community profile catalog…",
+      "loadingProfile": "Loading…",
+      "retry": "Retry",
+      "refresh": "Refresh",
+      "searchPlaceholder": "Search title, author, target or tag",
+      "allVehicles": "All vehicle types",
+      "resultCount": "{count} profiles",
+      "updatedAt": "Catalog updated: {date}",
+      "empty": "No community profiles match these filters.",
+      "compatible": "Current target",
+      "target": "Target",
+      "pwm": "PWM",
+      "motors": "Motors",
+      "replaceDraftConfirm": "There are imported values that have not been saved. Continue and replace those form drafts with this community profile?"
+    }
   },
   "runtime": {
     "heading": "Runtime Options",
@@ -297,7 +318,8 @@
     "profileExported": "Configuration profile exported",
     "profileImported": "Profile imported into the forms. Nothing has been written to the receiver.",
     "profileDiscarded": "Imported values discarded",
-    "communitySubmitted": "Submission sent; review PR #{number} was created"
+    "communitySubmitted": "Submission sent; review PR #{number} was created",
+    "communityProfileDownloaded": "Community profile downloaded: {title}"
   },
   "error": {
     "timeout": "Timeout connecting to {host}",
@@ -324,7 +346,14 @@
     "profileMixerLength": "Mixer must contain 0 to 8 rows of four values",
     "profileOrientation": "Board orientation is not a valid rotation matrix",
     "communityProfileRequired": "Choose a local profile file first",
-    "communityTimeout": "The community service timed out; restore internet access and try again"
+    "communityTimeout": "The community service timed out; restore internet access and try again",
+    "communityCatalogInvalid": "The community catalog format is invalid",
+    "communityCatalogTimeout": "Loading the community catalog timed out; check your internet connection",
+    "communityProfileOrigin": "The community profile download URL is not trusted",
+    "communityProfileTooLarge": "The community profile file is too large",
+    "communityProfileIntegrity": "The community profile failed SHA-256 verification; refresh the catalog and try again",
+    "communityProfileInvalid": "The community profile does not match its catalog entry",
+    "communityProfileTimeout": "Downloading the community profile timed out; check your internet connection"
   },
   "lang": {
     "label": "Language",

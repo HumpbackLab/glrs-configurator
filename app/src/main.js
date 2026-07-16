@@ -13,6 +13,8 @@ const PROFILE_SUBMISSION_FORMAT = 'gyro-elrs-profile-submission';
 const PROFILE_SUBMISSION_VERSION = 1;
 const PROFILE_SUBMISSION_API = import.meta.env.VITE_PROFILE_SUBMISSION_URL
   || 'https://gyro-elrs-profile-catalog.huangcmzzk.workers.dev/api/submissions';
+const PROFILE_CATALOG_API = import.meta.env.VITE_PROFILE_CATALOG_URL
+  || 'https://gyro-elrs-profile-catalog.huangcmzzk.workers.dev/catalog.json';
 
 function defaultUpdateSource() {
   return getLocale() === 'zh-CN' ? 'gitee' : 'github';
@@ -77,6 +79,16 @@ const state = {
     profile: null,
     fileName: '',
     result: null,
+  },
+  communityCatalog: {
+    open: false,
+    status: 'idle',
+    profiles: [],
+    generatedAt: '',
+    query: '',
+    vehicleType: '',
+    busyId: '',
+    error: '',
   },
 };
 
@@ -1527,14 +1539,7 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
   return {draft, warnings};
 }
 
-async function importProfileFile(file) {
-  if (!file) return;
-  let profile;
-  try {
-    profile = JSON.parse(await file.text());
-  } catch {
-    throw new Error(t('error.profileJson'));
-  }
+function applyImportedProfile(profile) {
   const {draft, warnings} = validateProfile(profile);
   state.profileDraft = draft;
   state.profileOriginal = structuredClone(profile);
@@ -1548,6 +1553,17 @@ async function importProfileFile(file) {
     ? `${t('message.profileImported')} ${warnings.join(' ')}`
     : t('message.profileImported')};
   render();
+}
+
+async function importProfileFile(file) {
+  if (!file) return;
+  let profile;
+  try {
+    profile = JSON.parse(await file.text());
+  } catch {
+    throw new Error(t('error.profileJson'));
+  }
+  applyImportedProfile(profile);
 }
 
 function discardProfileDraft() {
@@ -1584,6 +1600,217 @@ function validateCommunityProfile(profile) {
   if (profile.version !== PROFILE_VERSION) throw new Error(t('error.profileVersion', {version: profile.version}));
   if (!profile.pwm && !profile.flight) throw new Error(t('error.profileEmpty'));
   return profile;
+}
+
+function openCommunityCatalog() {
+  state.communityCatalog.open = true;
+  render();
+  if (state.communityCatalog.status === 'idle' || state.communityCatalog.status === 'error') {
+    void loadCommunityCatalog();
+  }
+}
+
+function closeCommunityCatalog() {
+  state.communityCatalog.open = false;
+  state.communityCatalog.busyId = '';
+  render();
+}
+
+function validateCommunityCatalog(value) {
+  if (!value || value.schemaVersion !== 1 || !Array.isArray(value.profiles)) {
+    throw new Error(t('error.communityCatalogInvalid'));
+  }
+  value.profiles.forEach((item) => {
+    if (!item || typeof item.id !== 'string' || typeof item.title !== 'string'
+      || typeof item.profileUrl !== 'string' || !/^[a-f0-9]{64}$/i.test(item.sha256 || '')) {
+      throw new Error(t('error.communityCatalogInvalid'));
+    }
+  });
+  return value;
+}
+
+async function loadCommunityCatalog() {
+  state.communityCatalog.status = 'loading';
+  state.communityCatalog.error = '';
+  render();
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(PROFILE_CATALOG_API, {
+      headers: {Accept: 'application/json'},
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const catalog = validateCommunityCatalog(await response.json());
+    state.communityCatalog.profiles = catalog.profiles;
+    state.communityCatalog.generatedAt = catalog.generatedAt || '';
+    state.communityCatalog.status = 'ready';
+  } catch (error) {
+    state.communityCatalog.status = 'error';
+    state.communityCatalog.error = error.name === 'AbortError'
+      ? t('error.communityCatalogTimeout')
+      : (error.message || String(error));
+  } finally {
+    window.clearTimeout(timeout);
+    render();
+  }
+}
+
+function communityFilteredProfiles() {
+  const query = state.communityCatalog.query.trim().toLocaleLowerCase();
+  return state.communityCatalog.profiles.filter((item) => {
+    if (state.communityCatalog.vehicleType && communityVehicleType(item) !== state.communityCatalog.vehicleType) return false;
+    if (!query) return true;
+    return [item.title, item.authorName, item.vehicleType, item.target, ...(item.tags || [])]
+      .some((value) => String(value || '').toLocaleLowerCase().includes(query));
+  });
+}
+
+function communityVehicleType(item) {
+  return item.vehicleType || (item.tags || []).find((tag) => ['multirotor', 'fixed-wing', 'vtol'].includes(tag)) || '';
+}
+
+function communityVehicleTypes() {
+  return [...new Set(state.communityCatalog.profiles.map(communityVehicleType).filter(Boolean))].sort();
+}
+
+function renderCommunityProfileCards() {
+  const profiles = communityFilteredProfiles();
+  if (!profiles.length) return `<div class="community-catalog-empty">${t('community.catalog.empty')}</div>`;
+  const currentTarget = state.target?.target || config().target || '';
+  return profiles.map((item) => {
+    const busy = state.communityCatalog.busyId === item.id;
+    const compatible = Boolean(currentTarget && item.target && currentTarget === item.target);
+    return `<article class="community-profile-card">
+      <div class="community-profile-heading">
+        <div><h3>${escapeHtml(item.title)}</h3><span>${escapeHtml(item.authorName || t('value.unknown'))}</span></div>
+        ${compatible ? `<span class="community-compatible">${t('community.catalog.compatible')}</span>` : ''}
+      </div>
+      <div class="community-profile-meta">
+        <span>${t('community.catalog.target')}: <strong>${escapeHtml(item.target || t('value.unknown'))}</strong></span>
+        <span>${t('community.catalog.pwm')}: <strong>${escapeHtml(item.profileSummary?.pwmOutputCount ?? 0)}</strong></span>
+        <span>${t('community.catalog.motors')}: <strong>${escapeHtml(item.profileSummary?.motorCount ?? 0)}</strong></span>
+      </div>
+      ${(item.tags || []).length ? `<div class="community-tags">${item.tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
+      <div class="actions community-profile-actions">
+        <button class="secondary" type="button" data-community-action="download" data-profile-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}>${t('action.downloadCommunityProfile')}</button>
+        <button class="primary" type="button" data-community-action="import" data-profile-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}>${busy ? t('community.catalog.loadingProfile') : t('action.importCommunityProfile')}</button>
+      </div>
+    </article>`;
+  }).join('');
+}
+
+function updateCommunityCatalogResults() {
+  const list = document.querySelector('#community-catalog-list');
+  const count = document.querySelector('#community-catalog-count');
+  if (list) list.innerHTML = renderCommunityProfileCards();
+  if (count) count.textContent = t('community.catalog.resultCount', {count: communityFilteredProfiles().length});
+  wireCommunityProfileActions();
+}
+
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+async function fetchCommunityProfile(item) {
+  const catalogUrl = new URL(PROFILE_CATALOG_API);
+  const profileUrl = new URL(item.profileUrl, catalogUrl);
+  if (profileUrl.origin !== catalogUrl.origin) throw new Error(t('error.communityProfileOrigin'));
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(profileUrl, {headers: {Accept: 'application/json'}, signal: controller.signal});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const raw = await response.text();
+    if (raw.length > 512 * 1024) throw new Error(t('error.communityProfileTooLarge'));
+    if ((await sha256Hex(raw)).toLowerCase() !== item.sha256.toLowerCase()) {
+      throw new Error(t('error.communityProfileIntegrity'));
+    }
+    let envelope;
+    try {
+      envelope = JSON.parse(raw);
+    } catch {
+      throw new Error(t('error.profileJson'));
+    }
+    if (envelope.id !== item.id || !envelope.profile) throw new Error(t('error.communityProfileInvalid'));
+    return validateCommunityProfile(envelope.profile);
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error(t('error.communityProfileTimeout'));
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function downloadJson(value, fileName) {
+  const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function handleCommunityProfileAction(action, id) {
+  const item = state.communityCatalog.profiles.find((profile) => profile.id === id);
+  if (!item || state.communityCatalog.busyId) return;
+  if (action === 'import' && state.profileDraft && !window.confirm(t('community.catalog.replaceDraftConfirm'))) return;
+  state.communityCatalog.busyId = id;
+  state.communityCatalog.error = '';
+  render();
+  try {
+    const profile = await fetchCommunityProfile(item);
+    if (action === 'download') {
+      const safeName = (item.slug || item.id).replace(/[^a-z0-9._-]+/gi, '-') || 'community-profile';
+      downloadJson(profile, `${safeName}-profile.json`);
+      state.communityCatalog.busyId = '';
+      state.message = {type: 'ok', text: t('message.communityProfileDownloaded', {title: item.title})};
+      render();
+      return;
+    }
+    state.communityCatalog.open = false;
+    state.communityCatalog.busyId = '';
+    applyImportedProfile(profile);
+  } catch (error) {
+    state.communityCatalog.busyId = '';
+    state.communityCatalog.error = error.message || String(error);
+    render();
+  }
+}
+
+function wireCommunityProfileActions() {
+  document.querySelectorAll('[data-community-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      void handleCommunityProfileAction(button.dataset.communityAction, button.dataset.profileId);
+    });
+  });
+}
+
+function renderCommunityCatalog() {
+  if (!state.communityCatalog.open) return '';
+  const loading = state.communityCatalog.status === 'loading';
+  const ready = state.communityCatalog.status === 'ready';
+  return `<div class="submission-modal" role="dialog" aria-modal="true" aria-labelledby="community-catalog-title">
+    <section class="submission-dialog community-catalog-dialog">
+      <div class="submission-dialog-heading">
+        <div><h2 id="community-catalog-title">${t('community.catalog.heading')}</h2><div class="helper">${t('community.catalog.description')}</div></div>
+        <button class="icon-button" type="button" data-action="community-catalog-close" aria-label="${t('action.cancel')}">×</button>
+      </div>
+      ${state.communityCatalog.error ? `<div class="message error">${escapeHtml(state.communityCatalog.error)}</div>` : ''}
+      ${loading ? `<div class="community-catalog-loading">${t('community.catalog.loading')}</div>` : ''}
+      ${state.communityCatalog.status === 'error' ? `<div class="actions"><button class="primary" type="button" data-action="community-catalog-refresh">${t('community.catalog.retry')}</button></div>` : ''}
+      ${ready ? `<div class="community-catalog-toolbar">
+        <input id="community-catalog-search" type="search" value="${escapeHtml(state.communityCatalog.query)}" placeholder="${t('community.catalog.searchPlaceholder')}">
+        <select id="community-catalog-vehicle"><option value="">${t('community.catalog.allVehicles')}</option>${communityVehicleTypes().map((vehicle) => `<option value="${escapeHtml(vehicle)}" ${selected(state.communityCatalog.vehicleType, vehicle)}>${escapeHtml(vehicle)}</option>`).join('')}</select>
+        <button class="secondary" type="button" data-action="community-catalog-refresh">${t('community.catalog.refresh')}</button>
+      </div>
+      <div class="community-catalog-summary"><span id="community-catalog-count">${t('community.catalog.resultCount', {count: communityFilteredProfiles().length})}</span>${state.communityCatalog.generatedAt ? `<span>${t('community.catalog.updatedAt', {date: new Date(state.communityCatalog.generatedAt).toLocaleString()})}</span>` : ''}</div>
+      <div id="community-catalog-list" class="community-catalog-list">${renderCommunityProfileCards()}</div>` : ''}
+    </section>
+  </div>`;
 }
 
 function openCommunitySubmission() {
@@ -1734,12 +1961,13 @@ function renderStatus() {
         <div class="actions">
           <button class="secondary" type="button" data-action="profile-export" ${profileCanExport() ? '' : 'disabled'}>${t('action.exportProfile')}</button>
           <button class="primary" type="button" data-action="profile-import">${t('action.importProfile')}</button>
+          <button class="secondary" type="button" data-action="community-catalog-open">${t('action.browseCommunity')}</button>
           <button class="secondary" type="button" data-action="community-submit">${t('action.submitCommunity')}</button>
           ${state.profileDraft ? `<button class="danger" type="button" data-action="profile-discard">${t('action.discardProfile')}</button>` : ''}
         </div>
         ${state.communitySubmission.result ? `<div class="notice community-result">${t('community.pendingReview')} <a href="${escapeHtml(state.communitySubmission.result.pullRequestUrl)}" target="_blank" rel="noopener">#${escapeHtml(state.communitySubmission.result.pullRequestNumber)}</a></div>` : ''}
       </section>
-    </div>${renderCommunitySubmission()}`;
+    </div>${renderCommunityCatalog()}${renderCommunitySubmission()}`;
 }
 
 function renderRuntime() {
@@ -2548,6 +2776,15 @@ function wireEvents() {
     }
   });
   document.querySelector('#community-submission-form')?.addEventListener('submit', submitCommunityProfile);
+  document.querySelector('#community-catalog-search')?.addEventListener('input', (event) => {
+    state.communityCatalog.query = event.target.value;
+    updateCommunityCatalogResults();
+  });
+  document.querySelector('#community-catalog-vehicle')?.addEventListener('change', (event) => {
+    state.communityCatalog.vehicleType = event.target.value;
+    updateCommunityCatalogResults();
+  });
+  wireCommunityProfileActions();
 
   const phraseInput = document.querySelector('#phrase');
   const vbindInput = document.querySelector('#vbind');
@@ -2616,6 +2853,9 @@ function wireEvents() {
       if (action === 'profile-export') exportProfile();
       if (action === 'profile-import') document.querySelector('#profile-file')?.click();
       if (action === 'profile-discard') discardProfileDraft();
+      if (action === 'community-catalog-open') openCommunityCatalog();
+      if (action === 'community-catalog-close') closeCommunityCatalog();
+      if (action === 'community-catalog-refresh') void loadCommunityCatalog();
       if (action === 'community-submit') openCommunitySubmission();
       if (action === 'community-close') closeCommunitySubmission();
     });

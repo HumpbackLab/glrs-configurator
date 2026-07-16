@@ -412,6 +412,117 @@ button:disabled {
   min-height: 18px;
 }
 
+.community-catalog-dialog {
+  max-width: 920px;
+}
+
+.community-catalog-toolbar {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(220px, 1fr) minmax(150px, 220px) auto;
+}
+
+.community-catalog-toolbar input,
+.community-catalog-toolbar select {
+  min-width: 0;
+}
+
+.community-catalog-summary {
+  color: #64748b;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 8px 18px;
+  justify-content: space-between;
+  margin: 12px 0;
+}
+
+.community-catalog-list {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.community-catalog-loading,
+.community-catalog-empty {
+  background: #f5f7fa;
+  border: 1px dashed #c9d2dc;
+  border-radius: 8px;
+  color: #64748b;
+  padding: 28px 16px;
+  text-align: center;
+}
+
+.community-profile-card {
+  background: #fff;
+  border: 1px solid #d8dee6;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 14px;
+}
+
+.community-profile-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.community-profile-heading h3 {
+  color: #172033;
+  font-size: 16px;
+  margin: 0 0 3px;
+  overflow-wrap: anywhere;
+}
+
+.community-profile-heading span,
+.community-profile-meta {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.community-profile-heading .community-compatible {
+  background: #def7ec;
+  border-radius: 999px;
+  color: #176b55;
+  flex: 0 0 auto;
+  font-weight: 700;
+  padding: 4px 8px;
+}
+
+.community-profile-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 14px;
+  margin-top: 12px;
+}
+
+.community-profile-meta strong {
+  color: #344054;
+}
+
+.community-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.community-tags span {
+  background: #edf2f7;
+  border-radius: 999px;
+  color: #475569;
+  font-size: 11px;
+  padding: 3px 7px;
+}
+
+.community-profile-actions {
+  margin-top: auto;
+  padding-top: 14px;
+}
+
 @media (max-width: 560px) {
   .submission-modal {
     align-items: stretch;
@@ -425,6 +536,11 @@ button:disabled {
   }
 
   .submission-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .community-catalog-toolbar,
+  .community-catalog-list {
     grid-template-columns: 1fr;
   }
 }
