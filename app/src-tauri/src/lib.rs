@@ -311,7 +311,7 @@ mod app_updates {
 
 #[cfg(desktop)]
 mod firmware_updates {
-    use reqwest::Client;
+    use reqwest::{Client, Url};
     use serde::{Deserialize, Serialize};
     use sha2::{Digest, Sha256};
     use std::fs::{self, File};
@@ -328,6 +328,9 @@ mod firmware_updates {
     const GITHUB_DOWNLOAD_PREFIX: &str =
         "https://github.com/HumpbackLab/Gyro-ELRS/releases/download/";
     const GITEE_DOWNLOAD_PREFIX: &str = "https://gitee.com/ncer/Gyro-ELRS/releases/download/";
+    const GITHUB_RELEASE_API: &str =
+        "https://api.github.com/repos/HumpbackLab/Gyro-ELRS/releases/tags/";
+    const GITEE_RELEASE_API: &str = "https://gitee.com/api/v5/repos/ncer/Gyro-ELRS/releases/tags/";
     const MAX_FIRMWARE_SIZE: u64 = 8 * 1024 * 1024;
 
     #[derive(Deserialize)]
@@ -335,7 +338,14 @@ mod firmware_updates {
         schema: u32,
         version: String,
         published_at: String,
+        #[serde(default)]
+        notes: Option<String>,
         firmwares: Vec<FirmwareEntry>,
+    }
+
+    #[derive(Deserialize)]
+    struct ReleaseMetadata {
+        body: Option<String>,
     }
 
     #[derive(Clone, Deserialize)]
@@ -379,6 +389,7 @@ mod firmware_updates {
     pub struct FirmwareCheckResult {
         current_version: String,
         latest_version: String,
+        notes: String,
         update: Option<FirmwareMetadata>,
     }
 
@@ -422,6 +433,41 @@ mod firmware_updates {
             "gitee" => Ok(GITEE_MANIFEST),
             _ => Err(format!("unknown firmware source: {source}")),
         }
+    }
+
+    fn release_notes_endpoint(source: &str, version: &str) -> Result<Url, String> {
+        let base = match source {
+            "github" => GITHUB_RELEASE_API,
+            "gitee" => GITEE_RELEASE_API,
+            _ => return Err(format!("unknown firmware source: {source}")),
+        };
+        let mut url = Url::parse(base).map_err(|error| error.to_string())?;
+        url.path_segments_mut()
+            .map_err(|_| "release notes URL cannot be a base".to_string())?
+            .pop_if_empty()
+            .push(version);
+        Ok(url)
+    }
+
+    async fn fetch_release_notes(client: &Client, source: &str, version: &str) -> String {
+        let Ok(url) = release_notes_endpoint(source, version) else {
+            return String::new();
+        };
+        let response = client
+            .get(url)
+            .header("User-Agent", "gyro-elrs-configurator")
+            .timeout(Duration::from_secs(8))
+            .send()
+            .await;
+        let Ok(response) = response.and_then(|response| response.error_for_status()) else {
+            return String::new();
+        };
+        response
+            .json::<ReleaseMetadata>()
+            .await
+            .ok()
+            .and_then(|release| release.body)
+            .unwrap_or_default()
     }
 
     fn download_url(entry: &FirmwareEntry, source: &str) -> Result<String, String> {
@@ -513,6 +559,22 @@ mod firmware_updates {
                 "firmware download URL is not from the selected source"
             );
         }
+
+        #[test]
+        fn builds_release_notes_urls_for_each_source() {
+            assert_eq!(
+                release_notes_endpoint("github", "v0.9.2_e364")
+                    .unwrap()
+                    .as_str(),
+                "https://api.github.com/repos/HumpbackLab/Gyro-ELRS/releases/tags/v0.9.2_e364"
+            );
+            assert_eq!(
+                release_notes_endpoint("gitee", "v0.9.2_e364")
+                    .unwrap()
+                    .as_str(),
+                "https://gitee.com/api/v5/repos/ncer/Gyro-ELRS/releases/tags/v0.9.2_e364"
+            );
+        }
     }
 
     #[tauri::command]
@@ -521,10 +583,11 @@ mod firmware_updates {
         source: String,
         pending: State<'_, PendingFirmwareUpdate>,
     ) -> Result<FirmwareCheckResult, String> {
-        let response = Client::builder()
+        let client = Client::builder()
             .timeout(Duration::from_secs(20))
             .build()
-            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?;
+        let response = client
             .get(manifest_endpoint(&source)?)
             .send()
             .await
@@ -539,6 +602,17 @@ mod firmware_updates {
                 manifest.schema
             ));
         }
+        let notes = manifest
+            .notes
+            .as_deref()
+            .filter(|notes| !notes.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(String::new);
+        let notes = if notes.is_empty() {
+            fetch_release_notes(&client, &source, &manifest.version).await
+        } else {
+            notes
+        };
         let entry = if let Some(device) = device.as_ref() {
             manifest
                 .firmwares
@@ -593,6 +667,7 @@ mod firmware_updates {
         Ok(FirmwareCheckResult {
             current_version,
             latest_version: manifest.version,
+            notes,
             update,
         })
     }

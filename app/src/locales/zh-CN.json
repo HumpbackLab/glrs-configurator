@@ -228,6 +228,8 @@
     "description": "联网时检查并下载最新 LightFin Nano 固件；随后连接接收机 WiFi，即可比较版本并使用下方功能手动刷写。",
     "downloading": "正在下载并校验固件",
     "savedTo": "固件已保存到 {path}",
+    "latestVersion": "最新固件版本",
+    "releaseNotes": "Release Notes",
     "status": {
       "idle": "尚未检查固件更新",
       "checking": "正在检查固件更新…",
@@ -347,6 +349,7 @@
     "profileOrientation": "飞控安装角不是有效的旋转矩阵",
     "communityProfileRequired": "请先选择本地配置文件",
     "communityTimeout": "连接社区服务超时，请确认已恢复互联网后重试",
+    "communityVehicleRequired": "请选择机型",
     "communityCatalogInvalid": "社区目录格式无效",
     "communityCatalogTimeout": "获取社区目录超时，请检查互联网连接",
     "communityProfileOrigin": "社区配置下载地址不受信任",

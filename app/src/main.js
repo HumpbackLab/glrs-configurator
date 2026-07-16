@@ -53,6 +53,7 @@ const state = {
     status: 'idle',
     currentVersion: '',
     latestVersion: '',
+    notes: '',
     productName: '',
     target: '',
     filename: '',
@@ -675,6 +676,7 @@ async function loadDevice() {
       status: 'idle',
       currentVersion: currentFirmwareVersion,
       latestVersion: '',
+      notes: '',
       productName: '',
       target: '',
       filename: '',
@@ -1131,7 +1133,7 @@ async function checkFirmwareUpdate() {
     render();
     return;
   }
-  state.firmwareUpdate = {...state.firmwareUpdate, status: 'checking', error: '', path: '', downloaded: 0, total: 0};
+  state.firmwareUpdate = {...state.firmwareUpdate, status: 'checking', latestVersion: '', notes: '', error: '', path: '', downloaded: 0, total: 0};
   render();
   try {
     const result = await tauriInvoke('check_firmware_update', {
@@ -1146,6 +1148,7 @@ async function checkFirmwareUpdate() {
       status: result.update ? (state.target ? 'available' : 'availableUnconnected') : 'current',
       currentVersion: result.currentVersion,
       latestVersion: result.latestVersion,
+      notes: result.notes || '',
       productName: result.update?.productName || state.target?.product_name || '',
       target: result.update?.target || state.target?.target || '',
       filename: result.update?.filename || '',
@@ -1853,6 +1856,11 @@ async function submitCommunityProfile(event) {
   }
   const data = new FormData(form);
   const vehicleTag = String(data.get('vehicleTag') || '').trim();
+  if (!vehicleTag) {
+    errorBox.textContent = t('error.communityVehicleRequired');
+    form.elements.vehicleTag?.focus();
+    return;
+  }
   const customTags = String(data.get('tags') || '').split(/[,，]/).map((tag) => tag.trim()).filter(Boolean);
   const tags = [...new Set([vehicleTag, ...customTags].filter(Boolean))];
   const metadata = {
@@ -1916,7 +1924,7 @@ function renderCommunitySubmission() {
           <div class="row"><label for="community-summary">${t('community.summary')}</label><textarea id="community-summary" name="summary" maxlength="500"></textarea></div>
           <div class="submission-fields">
             <div class="row"><label for="community-author">${t('community.authorName')}</label><input id="community-author" name="authorName" maxlength="40"></div>
-            <div class="row"><label for="community-vehicle">${t('community.vehicleType')}</label><select id="community-vehicle" name="vehicleTag"><option value="">${t('community.vehicleNone')}</option><option value="multirotor">${t('community.vehicleMultirotor')}</option><option value="fixed-wing">${t('community.vehicleFixedWing')}</option><option value="vtol">${t('community.vehicleVtol')}</option></select></div>
+            <div class="row"><label for="community-vehicle">${t('community.vehicleType')} *</label><select id="community-vehicle" name="vehicleTag" required><option value="">${t('community.vehicleNone')}</option><option value="multirotor">${t('community.vehicleMultirotor')}</option><option value="fixed-wing">${t('community.vehicleFixedWing')}</option><option value="vtol">${t('community.vehicleVtol')}</option></select></div>
           </div>
           <div class="row"><label for="community-tags">${t('community.tags')}</label><input id="community-tags" name="tags" maxlength="249" placeholder="${t('community.tagsPlaceholder')}"></div>
           <div class="helper">${t('community.licenseNotice')}</div>
@@ -2474,6 +2482,8 @@ function renderUpdate() {
         </div>
         <div class="notice app-update-status">${escapeHtml(firmwareStatus)}</div>
         ${firmwareUpdate.error ? `<div class="message error">${escapeHtml(firmwareUpdate.error)}</div>` : ''}
+        ${firmwareUpdate.latestVersion ? `<div class="firmware-release-version"><span>${t('firmwareUpdate.latestVersion')}</span><strong>${escapeHtml(firmwareUpdate.latestVersion)}</strong></div>` : ''}
+        ${firmwareUpdate.notes ? `<div class="firmware-release-notes"><strong>${t('firmwareUpdate.releaseNotes')}</strong><div class="app-update-notes">${escapeHtml(firmwareUpdate.notes)}</div></div>` : ''}
         ${firmwareUpdate.path ? `<div class="app-update-notes">${escapeHtml(t('firmwareUpdate.savedTo', {path: firmwareUpdate.path}))}</div>` : ''}
         ${firmwareUpdate.status === 'downloading' ? `<div class="upload-progress"><div class="upload-progress-meta"><span>${t('firmwareUpdate.downloading')}</span><strong>${firmwareProgressPercent}%</strong></div><div class="upload-progress-bar"><span style="width:${firmwareProgressPercent}%"></span></div></div>` : ''}
         <div class="actions">
@@ -2728,7 +2738,7 @@ function wireEvents() {
     state.updateSource = event.target.value;
     localStorage.setItem(UPDATE_SOURCE_STORAGE_KEY, state.updateSource);
     state.appUpdate = {...state.appUpdate, status: 'idle', version: '', notes: '', error: ''};
-    state.firmwareUpdate = {...state.firmwareUpdate, status: 'idle', latestVersion: '', productName: '', target: '', filename: '', path: '', error: ''};
+    state.firmwareUpdate = {...state.firmwareUpdate, status: 'idle', latestVersion: '', notes: '', productName: '', target: '', filename: '', path: '', error: ''};
     render();
   };
   document.querySelector('#app-update-source')?.addEventListener('change', updateSourceChanged);

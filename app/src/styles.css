@@ -590,6 +590,36 @@ button:disabled {
   white-space: pre-wrap;
 }
 
+.firmware-release-version {
+  align-items: center;
+  background: #eef7f5;
+  border: 1px solid #b8ddd5;
+  border-radius: 6px;
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding: 10px 12px;
+}
+
+.firmware-release-version span {
+  color: #52616f;
+  font-size: 13px;
+}
+
+.firmware-release-version strong {
+  color: #176b55;
+}
+
+.firmware-release-notes {
+  color: #344054;
+  font-size: 13px;
+  margin-top: 12px;
+}
+
+.firmware-release-notes .app-update-notes {
+  margin-top: 6px;
+}
+
 .message {
   border-radius: 6px;
   margin-bottom: 16px;

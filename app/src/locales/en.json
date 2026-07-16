@@ -228,6 +228,8 @@
     "description": "While online, check for and download the latest LightFin Nano firmware. You can then connect to the receiver WiFi to compare versions and flash it manually.",
     "downloading": "Downloading and verifying firmware",
     "savedTo": "Firmware saved to {path}",
+    "latestVersion": "Latest firmware version",
+    "releaseNotes": "Release Notes",
     "status": {
       "idle": "Firmware updates have not been checked yet",
       "checking": "Checking for firmware updates…",
@@ -347,6 +349,7 @@
     "profileOrientation": "Board orientation is not a valid rotation matrix",
     "communityProfileRequired": "Choose a local profile file first",
     "communityTimeout": "The community service timed out; restore internet access and try again",
+    "communityVehicleRequired": "Select a vehicle type",
     "communityCatalogInvalid": "The community catalog format is invalid",
     "communityCatalogTimeout": "Loading the community catalog timed out; check your internet connection",
     "communityProfileOrigin": "The community profile download URL is not trusted",
