@@ -2505,6 +2505,7 @@ function wireModeRangeEditors() {
     const syncArm = () => {
       const disabled = !armToggle.checked;
       armConfig.classList.toggle('is-disabled', disabled);
+      armConfig.querySelector('[data-mode-range]')?.classList.toggle('is-disabled', disabled);
       armConfig.querySelectorAll('select, [data-range-handle], [data-range-number]').forEach((input) => {
         input.disabled = disabled;
       });
