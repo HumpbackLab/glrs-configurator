@@ -309,7 +309,6 @@ mod app_updates {
     }
 }
 
-#[cfg(desktop)]
 mod firmware_updates {
     use reqwest::{Client, Url};
     use serde::{Deserialize, Serialize};
@@ -759,10 +758,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            app.manage(firmware_updates::PendingFirmwareUpdate::new());
             #[cfg(desktop)]
             {
                 app.manage(app_updates::PendingUpdate(Mutex::new(None)));
-                app.manage(firmware_updates::PendingFirmwareUpdate::new());
                 app.handle()
                     .plugin(tauri_plugin_updater::Builder::new().build())?;
             }
@@ -776,9 +775,7 @@ pub fn run() {
             app_updates::check_app_update,
             #[cfg(desktop)]
             app_updates::install_app_update,
-            #[cfg(desktop)]
             firmware_updates::check_firmware_update,
-            #[cfg(desktop)]
             firmware_updates::download_firmware_update
         ])
         .run(tauri::generate_context!())
