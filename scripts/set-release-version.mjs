@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
 const checkOnly = args.includes("--check");
-const requestedVersion = args.find((argument) => !argument.startsWith("--"));
+const requestedVersion = args.find((argument) => !argument.startsWith("--"))
+  ?? process.env.RELEASE_TAG;
 const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 function usage() {

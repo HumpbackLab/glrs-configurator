@@ -72,9 +72,7 @@ jobs:
         run: npm ci
 
       - name: Verify application version matches release tag
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
-        run: node scripts/set-release-version.mjs "$RELEASE_TAG" --check
+        run: node scripts/set-release-version.mjs "${{ github.event.release.tag_name || inputs.tag }}" --check
 
       - name: Build and attach package to the GitHub Release
         uses: tauri-apps/tauri-action@v1
