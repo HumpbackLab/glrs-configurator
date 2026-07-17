@@ -3,6 +3,16 @@ name: Build release packages
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build
+        required: true
+        type: string
+      release_id:
+        description: Existing GitHub Release ID
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -23,14 +33,14 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     concurrency:
-      group: release-${{ github.event.release.id }}-${{ matrix.platform }}
+      group: release-${{ github.event.release.id || inputs.release_id }}-${{ matrix.platform }}
       cancel-in-progress: false
 
     steps:
       - name: Check out the release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -61,11 +71,10 @@ jobs:
         working-directory: app
         run: npm ci
 
-      - name: Set application version from release tag
-        working-directory: app
+      - name: Verify application version matches release tag
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: node -e "const fs = require('fs'); const version = process.env.RELEASE_TAG.replace(/^v/, ''); if (!/^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$/.test(version)) throw new Error('Release tag must be vX.Y.Z or X.Y.Z'); fs.writeFileSync('src-tauri/tauri.release.conf.json', JSON.stringify({ version }));"
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: node scripts/set-release-version.mjs "$RELEASE_TAG" --check
 
       - name: Build and attach package to the GitHub Release
         uses: tauri-apps/tauri-action@v1
@@ -75,10 +84,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: app
-          releaseId: ${{ github.event.release.id }}
-          tagName: ${{ github.event.release.tag_name }}
+          releaseId: ${{ github.event.release.id || inputs.release_id }}
+          tagName: ${{ github.event.release.tag_name || inputs.tag }}
           updaterJsonPreferNsis: true
-          args: --config src-tauri/tauri.release.conf.json --bundles ${{ matrix.bundles }}
+          args: --bundles ${{ matrix.bundles }}
 
   sync-gitee:
     name: Sync release to Gitee
@@ -89,7 +98,7 @@ jobs:
       - name: Check out the release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
 
       - name: Sync GitHub release and updater manifest to Gitee
         env:
@@ -100,4 +109,4 @@ jobs:
           ./scripts/sync-github-release-to-gitee.sh \
             "${{ github.repository }}" \
             "$GITEE_REPOSITORY" \
-            "${{ github.event.release.tag_name }}"
+            "${{ github.event.release.tag_name || inputs.tag }}"

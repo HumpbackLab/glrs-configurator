@@ -7,6 +7,8 @@
     "dev": "vite --host localhost",
     "build": "vite build",
     "preview": "vite preview --host localhost",
+    "version:set": "node ../scripts/set-release-version.mjs",
+    "version:check": "node ../scripts/set-release-version.mjs --check",
     "tauri": "tauri"
   },
   "dependencies": {

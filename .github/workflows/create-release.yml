@@ -1,0 +1,110 @@
+name: Create release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example 0.2.0 or v0.2.0
+        required: true
+        type: string
+      prerelease:
+        description: Mark this release as a prerelease
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: create-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Bump version and create release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Synchronize release version
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          node scripts/set-release-version.mjs "$REQUESTED_VERSION"
+          VERSION="${REQUESTED_VERSION#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Validate frontend build
+        working-directory: app
+        run: npm run build
+
+      - name: Commit version and create tag
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if git rev-parse --verify --quiet "refs/tags/$TAG"; then
+            echo "Tag already exists: $TAG" >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            app/package.json \
+            app/package-lock.json \
+            app/src-tauri/tauri.conf.json \
+            app/src-tauri/Cargo.toml \
+            app/src-tauri/Cargo.lock
+          git diff --cached --check
+
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: release $TAG"
+          fi
+
+          git tag -a "$TAG" -m "Release $TAG"
+          git push --atomic origin "HEAD:$BASE_BRANCH" "$TAG"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          ARGS=("$TAG" --verify-tag --title "$TAG" --generate-notes)
+          if [[ "$PRERELEASE" == "true" ]]; then
+            ARGS+=(--prerelease)
+          fi
+          gh release create "${ARGS[@]}"
+
+      - name: Start release package build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          RELEASE_ID="$(gh api "repos/${{ github.repository }}/releases/tags/$TAG" --jq '.id')"
+          gh workflow run release.yml \
+            --ref "$TAG" \
+            -f tag="$TAG" \
+            -f release_id="$RELEASE_ID"
