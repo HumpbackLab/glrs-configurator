@@ -5,7 +5,7 @@
   "identifier": "org.expresslrs.gyro-configurator",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run tauri icon -- src-tauri/icons/icon.png",
     "devUrl": "http://localhost:5200",
     "frontendDist": "../dist"
   },
