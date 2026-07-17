@@ -172,7 +172,7 @@ jobs:
           tagName: ${{ github.event.release.tag_name || inputs.tag }}
           uploadUpdaterJson: false
           releaseAssetNamePattern: gyro-elrs-configurator_[version]_[arch].[ext]
-          args: --apk --ci
+          args: --apk --split-per-abi --ci
 
   sync-gitee:
     name: Sync release to Gitee
@@ -190,7 +190,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITEE_REPOSITORY: ${{ vars.GITEE_REPOSITORY || 'ncer/glrs-configurator' }}
+          GITEE_MAX_ASSET_BYTES: 50000000
           REQUIRED_ASSET_SUFFIXES: .apk
+          SKIP_OVERSIZE_ASSETS: 1
         run: |
           ./scripts/sync-github-release-to-gitee.sh \
             "${{ github.repository }}" \

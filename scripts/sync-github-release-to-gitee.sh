@@ -36,8 +36,9 @@
 #   GITEE_MANIFEST_BRANCH     Publish latest.json to this Gitee branch; default: master.
 #   GITEE_MANIFEST_PATH       Manifest path; default: updater/latest.json.
 #   REWRITE_LATEST_JSON       Rewrite download URLs to Gitee; default: 1.
-#   GITEE_MAX_ASSET_BYTES     Per-file limit; default: 104857600 (100 MiB).
+#   GITEE_MAX_ASSET_BYTES     Per-file limit; default: 50000000 (Gitee community limit).
 #   REQUIRED_ASSET_SUFFIXES   Comma-separated suffixes that must exist, e.g. .apk.
+#   SKIP_OVERSIZE_ASSETS      Skip files above the limit instead of failing; default: 0.
 #
 # The destination repository must be public for unauthenticated application
 # updates. Never commit access tokens to the repository.
@@ -70,9 +71,10 @@ Environment:
   GITEE_TARGET_COMMITISH      Branch/commit used when Gitee needs to create the tag.
   GITEE_MANIFEST_BRANCH       Also publish latest.json to this Gitee branch (default: master).
   GITEE_MANIFEST_PATH         Stable manifest path (default: updater/latest.json).
-  GITEE_MAX_ASSET_BYTES       Per-file limit (default: 104857600, Gitee community limit).
+  GITEE_MAX_ASSET_BYTES       Per-file limit (default: 50000000, Gitee community limit).
   REQUIRED_ASSET_SUFFIXES     Comma-separated GitHub asset suffixes that must exist.
   SKIP_EXISTING_ASSETS        Skip same-name, same-size non-manifest files (default: 0).
+  SKIP_OVERSIZE_ASSETS        Skip assets above GITEE_MAX_ASSET_BYTES (default: 0).
 
 The destination repository must be public if an unauthenticated desktop app will
 download updates from it. Existing attachments with the same filename are replaced.
@@ -108,12 +110,14 @@ requested_tag=${3:-latest}
 rewrite_latest=${REWRITE_LATEST_JSON:-1}
 manifest_branch=${GITEE_MANIFEST_BRANCH:-master}
 manifest_path=${GITEE_MANIFEST_PATH:-updater/latest.json}
-max_asset_bytes=${GITEE_MAX_ASSET_BYTES:-104857600}
+max_asset_bytes=${GITEE_MAX_ASSET_BYTES:-50000000}
 skip_existing=${SKIP_EXISTING_ASSETS:-0}
+skip_oversize=${SKIP_OVERSIZE_ASSETS:-0}
 required_asset_suffixes=${REQUIRED_ASSET_SUFFIXES:-}
 
 [[ $rewrite_latest == 0 || $rewrite_latest == 1 ]] || die "REWRITE_LATEST_JSON must be 0 or 1"
 [[ $skip_existing == 0 || $skip_existing == 1 ]] || die "SKIP_EXISTING_ASSETS must be 0 or 1"
+[[ $skip_oversize == 0 || $skip_oversize == 1 ]] || die "SKIP_OVERSIZE_ASSETS must be 0 or 1"
 [[ $max_asset_bytes =~ ^[0-9]+$ ]] || die "GITEE_MAX_ASSET_BYTES must be an integer"
 [[ $manifest_path =~ ^[A-Za-z0-9._/-]+$ ]] || die "GITEE_MANIFEST_PATH contains unsupported characters"
 
@@ -150,9 +154,10 @@ if [[ -n $required_asset_suffixes ]]; then
   IFS=',' read -r -a required_suffixes <<< "$required_asset_suffixes"
   for suffix in "${required_suffixes[@]}"; do
     [[ -n $suffix ]] || die "REQUIRED_ASSET_SUFFIXES contains an empty suffix"
-    jq -e --arg suffix "$suffix" 'any(.assets[]?; .name | endswith($suffix))' \
+    jq -e --arg suffix "$suffix" --argjson max "$max_asset_bytes" \
+      'any(.assets[]?; (.name | endswith($suffix)) and .size <= $max)' \
       "$tmp_dir/github-release.json" >/dev/null \
-      || die "GitHub release does not contain a required *$suffix asset"
+      || die "GitHub release does not contain a required *$suffix asset within the Gitee size limit"
   done
 fi
 
@@ -210,7 +215,13 @@ while IFS= read -r encoded_asset; do
   asset_url=$(jq -r '.browser_download_url' <<< "$asset")
   asset_size=$(jq -r '.size' <<< "$asset")
 
-  (( asset_size <= max_asset_bytes )) || die "$asset_name is $asset_size bytes; Gitee limit is $max_asset_bytes"
+  if (( asset_size > max_asset_bytes )); then
+    if [[ $skip_oversize == 1 ]]; then
+      echo "Skipping oversized Gitee asset: $asset_name ($asset_size bytes; limit $max_asset_bytes)"
+      continue
+    fi
+    die "$asset_name is $asset_size bytes; Gitee limit is $max_asset_bytes"
+  fi
 
   existing_size=$(jq -r --arg name "$asset_name" '.[] | select(.name == $name) | .size' "$tmp_dir/gitee-assets.json" | head -1)
   if [[ $skip_existing == 1 && $asset_name != latest.json && $existing_size == "$asset_size" ]]; then
