@@ -37,6 +37,7 @@
 #   GITEE_MANIFEST_PATH       Manifest path; default: updater/latest.json.
 #   REWRITE_LATEST_JSON       Rewrite download URLs to Gitee; default: 1.
 #   GITEE_MAX_ASSET_BYTES     Per-file limit; default: 104857600 (100 MiB).
+#   REQUIRED_ASSET_SUFFIXES   Comma-separated suffixes that must exist, e.g. .apk.
 #
 # The destination repository must be public for unauthenticated application
 # updates. Never commit access tokens to the repository.
@@ -70,6 +71,7 @@ Environment:
   GITEE_MANIFEST_BRANCH       Also publish latest.json to this Gitee branch (default: master).
   GITEE_MANIFEST_PATH         Stable manifest path (default: updater/latest.json).
   GITEE_MAX_ASSET_BYTES       Per-file limit (default: 104857600, Gitee community limit).
+  REQUIRED_ASSET_SUFFIXES     Comma-separated GitHub asset suffixes that must exist.
   SKIP_EXISTING_ASSETS        Skip same-name, same-size non-manifest files (default: 0).
 
 The destination repository must be public if an unauthenticated desktop app will
@@ -108,6 +110,7 @@ manifest_branch=${GITEE_MANIFEST_BRANCH:-master}
 manifest_path=${GITEE_MANIFEST_PATH:-updater/latest.json}
 max_asset_bytes=${GITEE_MAX_ASSET_BYTES:-104857600}
 skip_existing=${SKIP_EXISTING_ASSETS:-0}
+required_asset_suffixes=${REQUIRED_ASSET_SUFFIXES:-}
 
 [[ $rewrite_latest == 0 || $rewrite_latest == 1 ]] || die "REWRITE_LATEST_JSON must be 0 or 1"
 [[ $skip_existing == 0 || $skip_existing == 1 ]] || die "SKIP_EXISTING_ASSETS must be 0 or 1"
@@ -142,6 +145,16 @@ curl --fail-with-body --silent --show-error --location \
   "${github_headers[@]}" "$github_release_url" > "$tmp_dir/github-release.json"
 
 [[ $(jq -r '.draft' "$tmp_dir/github-release.json") != true ]] || die "draft GitHub releases cannot be mirrored"
+
+if [[ -n $required_asset_suffixes ]]; then
+  IFS=',' read -r -a required_suffixes <<< "$required_asset_suffixes"
+  for suffix in "${required_suffixes[@]}"; do
+    [[ -n $suffix ]] || die "REQUIRED_ASSET_SUFFIXES contains an empty suffix"
+    jq -e --arg suffix "$suffix" 'any(.assets[]?; .name | endswith($suffix))' \
+      "$tmp_dir/github-release.json" >/dev/null \
+      || die "GitHub release does not contain a required *$suffix asset"
+  done
+fi
 
 tag=$(jq -er '.tag_name' "$tmp_dir/github-release.json")
 release_name=$(jq -r '.name // .tag_name' "$tmp_dir/github-release.json")

@@ -87,9 +87,97 @@ jobs:
           updaterJsonPreferNsis: true
           args: --bundles ${{ matrix.bundles }}
 
+  android:
+    name: Build Android APK
+    runs-on: ubuntu-22.04
+    concurrency:
+      group: release-${{ github.event.release.id || inputs.release_id }}-android
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK and NDK packages
+        run: |
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;28.2.13676358"
+          echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Set up Rust with Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Verify application version matches release tag
+        run: node scripts/set-release-version.mjs "${{ github.event.release.tag_name || inputs.tag }}" --check
+
+      - name: Initialize Android project
+        working-directory: app
+        run: npm run tauri android init -- --ci
+
+      - name: Configure Android release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo "ANDROID_KEYSTORE_BASE64 is not configured" >&2; exit 1; }
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo "ANDROID_KEYSTORE_PASSWORD is not configured" >&2; exit 1; }
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/gyro-elrs-configurator-release.jks"
+          printf '%s\n' \
+            "storePassword=$ANDROID_KEYSTORE_PASSWORD" \
+            "keyPassword=$ANDROID_KEYSTORE_PASSWORD" \
+            "keyAlias=gyro-elrs-configurator" \
+            "storeFile=$RUNNER_TEMP/gyro-elrs-configurator-release.jks" \
+            > app/src-tauri/keystore.properties
+          chmod 600 "$RUNNER_TEMP/gyro-elrs-configurator-release.jks" app/src-tauri/keystore.properties
+
+      - name: Build and attach Android APK to the GitHub Release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app
+          mobile: android
+          releaseId: ${{ github.event.release.id || inputs.release_id }}
+          tagName: ${{ github.event.release.tag_name || inputs.tag }}
+          uploadUpdaterJson: false
+          releaseAssetNamePattern: gyro-elrs-configurator_[version]_[arch].[ext]
+          args: --apk --ci
+
   sync-gitee:
     name: Sync release to Gitee
-    needs: build
+    needs: [build, android]
     runs-on: ubuntu-latest
 
     steps:
@@ -103,6 +191,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITEE_REPOSITORY: ${{ vars.GITEE_REPOSITORY || 'ncer/glrs-configurator' }}
+          REQUIRED_ASSET_SUFFIXES: .apk
         run: |
           ./scripts/sync-github-release-to-gitee.sh \
             "${{ github.repository }}" \

@@ -24,6 +24,9 @@ core.*
 .env
 .env.*
 !.env.example
+*.jks
+*.keystore
+keystore.properties
 
 # Editor and OS files
 .DS_Store

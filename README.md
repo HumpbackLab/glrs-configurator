@@ -47,17 +47,38 @@ npm run tauri build    # 生产构建
 
 构建产物位于 `app/src-tauri/target/release/bundle/`。
 
+Android 首次构建前先初始化移动端工程：
+
+```bash
+cd app
+npm run tauri android init
+npm run tauri android build
+```
+
+Android Release 构建会自动允许访问接收机的明文 HTTP API（默认
+`http://10.0.0.1`）。该设置由构建前脚本应用到 Tauri 生成的 Gradle
+工程，因此重新执行 `android init` 或在 CI 中构建也不会丢失。
+
 ### 发布与应用自动更新
 
-发布 GitHub Release 后，`.github/workflows/release.yml` 会从 Release 标签构建对应版本，上传 Windows NSIS、Linux DEB、更新签名和 `latest.json`。Release 标签必须使用 `vX.Y.Z` 或 `X.Y.Z` 格式。
+发布 GitHub Release 后，`.github/workflows/release.yml` 会从 Release 标签构建对应版本，上传 Windows NSIS、Linux DEB、Android APK、更新签名和 `latest.json`。Release 标签必须使用 `vX.Y.Z` 或 `X.Y.Z` 格式。
 
 自动更新包使用 Tauri 签名密钥验证。发布前需要在 GitHub 仓库 Actions secrets 中配置：
 
 - `TAURI_SIGNING_PRIVATE_KEY`：Tauri updater 私钥的完整内容
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：私钥密码；无密码密钥可留空
+- `ANDROID_KEYSTORE_BASE64`：`app/src-tauri/gyro-elrs-configurator-release.jks` 的单行 Base64 内容
+- `ANDROID_KEYSTORE_PASSWORD`：Android keystore 和 `gyro-elrs-configurator` key alias 的密码
 - `GITEE_TOKEN`：具有目标 Gitee 仓库 Release 和文件写入权限的私人令牌
 
-发布工作流会在 Windows 和 Linux 构建全部成功后，将 Release 及其附件同步到 `ncer/glrs-configurator`，并更新 `master/updater/latest.json`。如需使用其他 Gitee 仓库，可在 GitHub Actions variables 中设置 `GITEE_REPOSITORY`（格式为 `owner/repository`）。
+可使用 GitHub CLI 从本地签名文件设置 Android Secrets，命令不会把密码打印到终端：
+
+```bash
+base64 -w 0 app/src-tauri/gyro-elrs-configurator-release.jks | gh secret set ANDROID_KEYSTORE_BASE64
+sed -n 's/^storePassword=//p' app/src-tauri/keystore.properties | gh secret set ANDROID_KEYSTORE_PASSWORD
+```
+
+发布工作流会在 Windows、Linux 和 Android 构建全部成功后，将 Release 及其附件同步到 `ncer/glrs-configurator`，并更新 `master/updater/latest.json`。同步前会确认 GitHub Release 中存在 APK，防止 Android 构建产物被遗漏。如需使用其他 Gitee 仓库，可在 GitHub Actions variables 中设置 `GITEE_REPOSITORY`（格式为 `owner/repository`）。
 
 私钥不得提交到仓库，且必须安全备份；丢失私钥后，已安装的应用将无法升级到使用新密钥签名的版本。
 
