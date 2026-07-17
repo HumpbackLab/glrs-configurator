@@ -2061,17 +2061,17 @@ function renderPwm() {
                 const failsafeDisabled = disabledRow || decoded.failsafeMode !== 0;
                 return `
                   <tr data-pwm-row="${index}">
-                    <th scope="row">${index + 1}</th>
-                    <td>${escapeHtml(entry.pin)}</td>
-                    <td><div class="badge-row pwm-badges">${pwmFeatureBadges(entry.features)}</div></td>
-                    <td><select name="pwm-mode-${index}" data-pwm-mode="${index}">${renderPwmModeOptions(entry.features, decoded.mode)}</select></td>
-                    <td><select name="pwm-source-${index}" data-pwm-dependent="${index}"><option value="0" ${selected(decoded.mixerMode ? 1 : 0, 0)}>${t('pwm.sourceRc')}</option><option value="1" ${selected(decoded.mixerMode ? 1 : 0, 1)}>${t('pwm.sourceMixer')}</option></select></td>
-                    <td><select name="pwm-input-${index}" data-pwm-dependent="${index}">${pwmInputLabels.map((label, value) => `<option value="${value}" ${selected(decoded.inputChannel, value)}>${label}</option>`).join('')}</select></td>
-                    <td><input name="pwm-invert-${index}" type="checkbox" data-pwm-dependent="${index}" ${checked(decoded.inverted)} ${disabled(disabledRow)}></td>
-                    <td><input name="pwm-polarity-${index}" type="checkbox" data-pwm-polarity="${index}" ${checked(decoded.signalPolarityInverted)}></td>
-                    <td><input name="pwm-narrow-${index}" type="checkbox" data-pwm-dependent="${index}" ${checked(decoded.narrow)} ${disabled(disabledRow)}></td>
-                    <td><select name="pwm-failsafe-mode-${index}" data-pwm-failsafe-mode="${index}" data-pwm-dependent="${index}" ${disabled(disabledRow)}>${pwmFailsafeModes.map((getLabel, value) => `<option value="${value}" ${selected(decoded.failsafeMode, value)}>${getLabel()}</option>`).join('')}</select></td>
-                    <td><input name="pwm-failsafe-${index}" type="number" min="988" max="2011" value="${escapeHtml(decoded.failsafe)}" data-pwm-failsafe="${index}" data-pwm-dependent="${index}" ${disabled(failsafeDisabled)}></td>
+                    <th scope="row" data-label="${escapeHtml(t('pwm.output'))}">${index + 1}</th>
+                    <td data-label="${escapeHtml(t('pwm.pin'))}">${escapeHtml(entry.pin)}</td>
+                    <td data-label="${escapeHtml(t('pwm.features'))}"><div class="badge-row pwm-badges">${pwmFeatureBadges(entry.features)}</div></td>
+                    <td data-label="${escapeHtml(t('pwm.mode'))}"><select name="pwm-mode-${index}" data-pwm-mode="${index}">${renderPwmModeOptions(entry.features, decoded.mode)}</select></td>
+                    <td data-label="${escapeHtml(t('pwm.source'))}"><select name="pwm-source-${index}" data-pwm-dependent="${index}"><option value="0" ${selected(decoded.mixerMode ? 1 : 0, 0)}>${t('pwm.sourceRc')}</option><option value="1" ${selected(decoded.mixerMode ? 1 : 0, 1)}>${t('pwm.sourceMixer')}</option></select></td>
+                    <td data-label="${escapeHtml(t('pwm.input'))}"><select name="pwm-input-${index}" data-pwm-dependent="${index}">${pwmInputLabels.map((label, value) => `<option value="${value}" ${selected(decoded.inputChannel, value)}>${label}</option>`).join('')}</select></td>
+                    <td data-label="${escapeHtml(t('pwm.invert'))}"><input name="pwm-invert-${index}" type="checkbox" data-pwm-dependent="${index}" ${checked(decoded.inverted)} ${disabled(disabledRow)}></td>
+                    <td data-label="${escapeHtml(t('pwm.polarityInvert'))}"><input name="pwm-polarity-${index}" type="checkbox" data-pwm-polarity="${index}" ${checked(decoded.signalPolarityInverted)}></td>
+                    <td data-label="${escapeHtml(t('pwm.narrow'))}"><input name="pwm-narrow-${index}" type="checkbox" data-pwm-dependent="${index}" ${checked(decoded.narrow)} ${disabled(disabledRow)}></td>
+                    <td data-label="${escapeHtml(t('pwm.failsafe'))}"><select name="pwm-failsafe-mode-${index}" data-pwm-failsafe-mode="${index}" data-pwm-dependent="${index}" ${disabled(disabledRow)}>${pwmFailsafeModes.map((getLabel, value) => `<option value="${value}" ${selected(decoded.failsafeMode, value)}>${getLabel()}</option>`).join('')}</select></td>
+                    <td data-label="${escapeHtml(t('pwm.position'))}"><input name="pwm-failsafe-${index}" type="number" min="988" max="2011" value="${escapeHtml(decoded.failsafe)}" data-pwm-failsafe="${index}" data-pwm-dependent="${index}" ${disabled(failsafeDisabled)}></td>
                   </tr>`;
               }).join('')}
             </tbody>

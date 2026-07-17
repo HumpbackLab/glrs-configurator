@@ -219,6 +219,9 @@ button:disabled {
 .table-shell {
   display: grid;
   gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
 }
 
 .grid-table {
@@ -878,7 +881,78 @@ button:disabled {
   }
 
   .pwm-table {
-    min-width: 900px;
+    border-collapse: separate;
+    border-spacing: 0;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .pwm-table thead {
+    display: none;
+  }
+
+  .pwm-table tbody,
+  .pwm-table tr {
+    display: block;
+    width: 100%;
+  }
+
+  .pwm-table tbody tr {
+    background: #fff;
+    border: 1px solid #d7dee7;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+
+  .pwm-table tbody th,
+  .pwm-table tbody td {
+    align-items: center;
+    border: 0;
+    border-bottom: 1px solid #e5e9ef;
+    display: grid;
+    gap: 10px;
+    grid-template-columns: minmax(92px, 36%) minmax(0, 1fr);
+    min-width: 0;
+    padding: 7px 9px;
+    text-align: left;
+    width: 100%;
+  }
+
+  .pwm-table tbody th {
+    background: #f5f7fa;
+  }
+
+  .pwm-table tbody tr > :last-child {
+    border-bottom: 0;
+  }
+
+  .pwm-table tbody th::before,
+  .pwm-table tbody td::before {
+    color: #596579;
+    content: attr(data-label);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: normal;
+  }
+
+  .pwm-table input,
+  .pwm-table select {
+    min-width: 0;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .pwm-table input[type="checkbox"] {
+    height: 20px;
+    justify-self: start;
+    min-height: 20px;
+    padding: 0;
+    width: 20px;
+  }
+
+  .pwm-badges {
+    justify-content: flex-start;
   }
 }
 
