@@ -12,9 +12,9 @@ const PROFILE_VERSION = 1;
 const PROFILE_SUBMISSION_FORMAT = 'gyro-elrs-profile-submission';
 const PROFILE_SUBMISSION_VERSION = 1;
 const PROFILE_SUBMISSION_API = import.meta.env.VITE_PROFILE_SUBMISSION_URL
-  || 'https://gyro-elrs-profile-catalog.huangcmzzk.workers.dev/api/submissions';
+  || 'https://share.humpbacklab.com/api/submissions';
 const PROFILE_CATALOG_API = import.meta.env.VITE_PROFILE_CATALOG_URL
-  || 'https://gyro-elrs-profile-catalog.huangcmzzk.workers.dev/catalog.json';
+  || 'https://share.humpbacklab.com/catalog.json';
 
 function defaultUpdateSource() {
   return getLocale() === 'zh-CN' ? 'gitee' : 'github';
