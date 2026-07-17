@@ -61,7 +61,7 @@ Android Release 构建会自动允许访问接收机的明文 HTTP API（默认
 
 ### 发布与应用自动更新
 
-发布 GitHub Release 后，`.github/workflows/release.yml` 会从 Release 标签构建对应版本，上传 Windows NSIS、Linux DEB、按 ABI 拆分的 Android APK、更新签名和 `latest.json`。Release 标签必须使用 `vX.Y.Z` 或 `X.Y.Z` 格式。
+发布 GitHub Release 后，`.github/workflows/release.yml` 会从 Release 标签构建对应版本，上传 Windows NSIS、Linux DEB、Android arm64-v8a APK、更新签名和 `latest.json`。Release 标签必须使用 `vX.Y.Z` 或 `X.Y.Z` 格式。
 
 自动更新包使用 Tauri 签名密钥验证。发布前需要在 GitHub 仓库 Actions secrets 中配置：
 
@@ -78,7 +78,7 @@ base64 -w 0 app/src-tauri/gyro-elrs-configurator-release.jks | gh secret set AND
 sed -n 's/^storePassword=//p' app/src-tauri/keystore.properties | gh secret set ANDROID_KEYSTORE_PASSWORD
 ```
 
-发布工作流会在 Windows、Linux 和 Android 构建全部成功后，将 Release 及其附件同步到 `ncer/glrs-configurator`，并更新 `master/updater/latest.json`。Android APK 按 ABI 拆分，以满足 Gitee 社区版 50 MB 的单文件限制；同步前会确认至少存在一个未超过限制的 APK。如需使用其他 Gitee 仓库，可在 GitHub Actions variables 中设置 `GITEE_REPOSITORY`（格式为 `owner/repository`）。
+发布工作流会在 Windows、Linux 和 Android 构建全部成功后，将 Release 及其附件同步到 `ncer/glrs-configurator`，并更新 `master/updater/latest.json`。Android 仅构建主流手机使用的 arm64-v8a APK，以满足 Gitee 社区版 50 MB 的单文件限制；同步前会确认至少存在一个未超过限制的 APK。如需使用其他 Gitee 仓库，可在 GitHub Actions variables 中设置 `GITEE_REPOSITORY`（格式为 `owner/repository`）。
 
 私钥不得提交到仓库，且必须安全备份；丢失私钥后，已安装的应用将无法升级到使用新密钥签名的版本。
 

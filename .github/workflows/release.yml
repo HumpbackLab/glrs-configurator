@@ -127,7 +127,7 @@ jobs:
       - name: Set up Rust with Android targets
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -172,7 +172,7 @@ jobs:
           tagName: ${{ github.event.release.tag_name || inputs.tag }}
           uploadUpdaterJson: false
           releaseAssetNamePattern: gyro-elrs-configurator_[version]_[arch].[ext]
-          args: --apk --split-per-abi --ci
+          args: --target aarch64 --apk --split-per-abi --ci
 
   sync-gitee:
     name: Sync release to Gitee
