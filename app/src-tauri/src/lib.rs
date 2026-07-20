@@ -318,7 +318,10 @@ mod firmware_updates {
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
     use std::time::Duration;
-    use tauri::{ipc::Channel, AppHandle, Manager, State};
+    use tauri::{
+        ipc::{Channel, Response},
+        AppHandle, Manager, State,
+    };
 
     const GITHUB_MANIFEST: &str =
         "https://github.com/HumpbackLab/Gyro-ELRS/releases/latest/download/firmware-latest.json";
@@ -347,7 +350,7 @@ mod firmware_updates {
         body: Option<String>,
     }
 
-    #[derive(Clone, Deserialize)]
+    #[derive(Clone, Debug, Deserialize)]
     struct FirmwareEntry {
         product_name: String,
         target: String,
@@ -357,7 +360,7 @@ mod firmware_updates {
         sources: FirmwareSources,
     }
 
-    #[derive(Clone, Deserialize)]
+    #[derive(Clone, Debug, Deserialize)]
     struct FirmwareSources {
         github: String,
         gitee: String,
@@ -392,7 +395,7 @@ mod firmware_updates {
         update: Option<FirmwareMetadata>,
     }
 
-    #[derive(Serialize)]
+    #[derive(Clone, Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct DownloadedFirmware {
         path: String,
@@ -418,12 +421,71 @@ mod firmware_updates {
         source: String,
     }
 
+    #[derive(Clone)]
+    struct StoredDownloadedFirmware {
+        result: DownloadedFirmware,
+        size: u64,
+        sha256: String,
+    }
+
     pub struct PendingFirmwareUpdate(Mutex<Option<PendingFirmware>>);
+
+    pub struct DownloadedFirmwareUpdate(Mutex<Option<StoredDownloadedFirmware>>);
 
     impl PendingFirmwareUpdate {
         pub fn new() -> Self {
             Self(Mutex::new(None))
         }
+    }
+
+    impl DownloadedFirmwareUpdate {
+        pub fn new() -> Self {
+            Self(Mutex::new(None))
+        }
+    }
+
+    fn select_firmware(
+        firmwares: Vec<FirmwareEntry>,
+        device: Option<&DeviceFirmware>,
+    ) -> Result<FirmwareEntry, String> {
+        let Some(device) = device else {
+            let mut firmwares = firmwares.into_iter();
+            let entry = firmwares
+                .next()
+                .ok_or_else(|| "firmware manifest is empty".to_string())?;
+            if firmwares.next().is_some() {
+                return Err("connect the receiver before selecting from multiple firmwares".into());
+            }
+            return Ok(entry);
+        };
+
+        let same_target = |entry: &&FirmwareEntry| {
+            entry
+                .target
+                .trim()
+                .eq_ignore_ascii_case(device.target.trim())
+        };
+        if let Some(entry) = firmwares.iter().find(|entry| {
+            same_target(entry)
+                && entry
+                    .product_name
+                    .trim()
+                    .eq_ignore_ascii_case(device.product_name.trim())
+        }) {
+            return Ok(entry.clone());
+        }
+
+        let mut target_matches = firmwares.iter().filter(same_target);
+        let entry = target_matches
+            .next()
+            .ok_or_else(|| "no compatible firmware found for this device".to_string())?;
+        if target_matches.next().is_some() {
+            return Err(
+                "multiple firmwares use this target; an exact product name match is required"
+                    .into(),
+            );
+        }
+        Ok(entry.clone())
     }
 
     fn manifest_endpoint(source: &str) -> Result<&'static str, String> {
@@ -574,6 +636,40 @@ mod firmware_updates {
                 "https://gitee.com/api/v5/repos/ncer/Gyro-ELRS/releases/tags/v0.9.2_e364"
             );
         }
+
+        #[test]
+        fn selects_unique_target_when_product_name_changed() {
+            let entry = firmware_entry(
+                "https://gitee.com/ncer/Gyro-ELRS/releases/download/v0.9.1_e364/firmware.bin",
+            );
+            let device = DeviceFirmware {
+                product_name: "Older LightFin product name".into(),
+                target: entry.target.clone(),
+                version: "v0.9.0".into(),
+            };
+
+            let selected = select_firmware(vec![entry.clone()], Some(&device)).unwrap();
+            assert_eq!(selected.product_name, entry.product_name);
+        }
+
+        #[test]
+        fn refuses_ambiguous_target_without_exact_product_match() {
+            let first = firmware_entry(
+                "https://gitee.com/ncer/Gyro-ELRS/releases/download/v0.9.1_e364/first.bin",
+            );
+            let mut second = first.clone();
+            second.product_name = "Another receiver".into();
+            let device = DeviceFirmware {
+                product_name: "Unknown receiver".into(),
+                target: first.target.clone(),
+                version: "v0.9.0".into(),
+            };
+
+            assert_eq!(
+                select_firmware(vec![first, second], Some(&device)).unwrap_err(),
+                "multiple firmwares use this target; an exact product name match is required"
+            );
+        }
     }
 
     #[tauri::command]
@@ -612,24 +708,7 @@ mod firmware_updates {
         } else {
             notes
         };
-        let entry = if let Some(device) = device.as_ref() {
-            manifest
-                .firmwares
-                .into_iter()
-                .find(|entry| {
-                    entry.product_name == device.product_name && entry.target == device.target
-                })
-                .ok_or_else(|| "no compatible firmware found for this device".to_string())?
-        } else {
-            let mut firmwares = manifest.firmwares.into_iter();
-            let entry = firmwares
-                .next()
-                .ok_or_else(|| "firmware manifest is empty".to_string())?;
-            if firmwares.next().is_some() {
-                return Err("connect the receiver before selecting from multiple firmwares".into());
-            }
-            entry
-        };
+        let entry = select_firmware(manifest.firmwares, device.as_ref())?;
         if entry.size == 0 || entry.size > MAX_FIRMWARE_SIZE {
             return Err("firmware size is invalid".into());
         }
@@ -675,6 +754,7 @@ mod firmware_updates {
     pub async fn download_firmware_update(
         app: AppHandle,
         pending: State<'_, PendingFirmwareUpdate>,
+        downloaded_firmware: State<'_, DownloadedFirmwareUpdate>,
         on_event: Channel<DownloadEvent>,
     ) -> Result<DownloadedFirmware, String> {
         let pending = pending
@@ -738,14 +818,44 @@ mod firmware_updates {
         fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
         let _ = on_event.send(DownloadEvent::Finished);
 
-        Ok(DownloadedFirmware {
+        let downloaded_firmware_result = DownloadedFirmware {
             filename: destination
                 .file_name()
                 .and_then(|value| value.to_str())
                 .unwrap_or(&pending.entry.filename)
                 .to_string(),
             path: destination.to_string_lossy().to_string(),
-        })
+        };
+        let stored_downloaded_firmware = StoredDownloadedFirmware {
+            result: downloaded_firmware_result.clone(),
+            size: pending.entry.size,
+            sha256: pending.entry.sha256,
+        };
+        *downloaded_firmware
+            .0
+            .lock()
+            .map_err(|_| "downloaded firmware state poisoned")? = Some(stored_downloaded_firmware);
+        Ok(downloaded_firmware_result)
+    }
+
+    #[tauri::command]
+    pub fn load_downloaded_firmware(
+        downloaded_firmware: State<'_, DownloadedFirmwareUpdate>,
+    ) -> Result<Response, String> {
+        let firmware = downloaded_firmware
+            .0
+            .lock()
+            .map_err(|_| "downloaded firmware state poisoned")?
+            .clone()
+            .ok_or_else(|| "no downloaded firmware is available".to_string())?;
+        let bytes = fs::read(&firmware.result.path).map_err(|error| error.to_string())?;
+        let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+        if bytes.len() as u64 != firmware.size
+            || actual_sha256 != firmware.sha256.to_ascii_lowercase()
+        {
+            return Err("downloaded firmware failed size or SHA-256 verification".into());
+        }
+        Ok(Response::new(bytes))
     }
 }
 
@@ -759,6 +869,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             app.manage(firmware_updates::PendingFirmwareUpdate::new());
+            app.manage(firmware_updates::DownloadedFirmwareUpdate::new());
             #[cfg(desktop)]
             {
                 app.manage(app_updates::PendingUpdate(Mutex::new(None)));
@@ -776,7 +887,8 @@ pub fn run() {
             #[cfg(desktop)]
             app_updates::install_app_update,
             firmware_updates::check_firmware_update,
-            firmware_updates::download_firmware_update
+            firmware_updates::download_firmware_update,
+            firmware_updates::load_downloaded_firmware
         ])
         .run(tauri::generate_context!())
         .expect("error while running Gyro ELRS Configurator");

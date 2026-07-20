@@ -175,13 +175,15 @@ https://raw.giteeusercontent.com/ncer/Gyro-ELRS/raw/elrs_fc/updater/firmware/fir
 }
 ```
 
-配置器使用以下字段选择 manifest 条目：
+配置器优先使用以下字段选择 manifest 条目：
 
 ```text
 product_name + target
 ```
 
-只有两个字段都相同，才认为固件与设备匹配。
+如果产品名变化导致精确匹配失败，但 manifest 中只有一个条目的 `target` 与设备相同，
+则回退使用这个唯一条目。如果同一个 `target` 对应多个产品，仍要求产品名精确匹配，
+避免刷入错误硬件固件。
 
 设备版本取 `version` 中第一个空格之前的内容。例如：
 
@@ -220,6 +222,10 @@ v0.9.0_e364 (abcdef) -> v0.9.0_e364
 5. 检查实际文件大小是否等于 manifest 的 `size`。
 6. 计算并比较 SHA-256。
 7. 校验通过后移动到系统 Downloads 目录。
+
+Android 上 Tauri 的 Downloads 是应用专属目录，通常位于 `Android/data/<应用包名>/files/Download`，
+系统文件管理器不便访问。配置器会保留本次下载记录；连接接收机后可点击“直接刷写已下载固件”，
+无需手工定位该文件。
 
 如果 Downloads 中已经存在同名文件，新文件会自动增加数字后缀，不覆盖原文件。例如：
 

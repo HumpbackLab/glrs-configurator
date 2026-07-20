@@ -37,6 +37,7 @@
     "installUpdate": "下载并安装",
     "checkFirmwareUpdate": "检查固件更新",
     "downloadLatestFirmware": "下载最新固件",
+    "flashDownloadedFirmware": "直接刷写已下载固件",
     "exportProfile": "导出配置",
     "importProfile": "导入配置",
     "discardProfile": "放弃导入内容",
@@ -228,6 +229,7 @@
     "description": "联网时检查并下载最新 LightFin Nano 固件；随后连接接收机 WiFi，即可比较版本并使用下方功能手动刷写。",
     "downloading": "正在下载并校验固件",
     "savedTo": "固件已保存到 {path}",
+    "directFlashHint": "连接接收机后可直接刷写已下载固件，无需在安卓文件管理器中查找。",
     "latestVersion": "最新固件版本",
     "releaseNotes": "Release Notes",
     "status": {

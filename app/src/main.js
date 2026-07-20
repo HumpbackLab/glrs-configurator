@@ -659,7 +659,7 @@ async function loadDevice() {
   state.hardware = hardwareResponse;
   const currentFirmwareVersion = (target?.version || '').split(/\s+/, 1)[0];
   const cachedFirmwareMatches = state.firmwareUpdate.latestVersion
-    && state.firmwareUpdate.productName === (target?.product_name || '')
+    && state.firmwareUpdate.target
     && state.firmwareUpdate.target === (target?.target || '');
   if (cachedFirmwareMatches) {
     state.firmwareUpdate = {
@@ -1021,13 +1021,7 @@ async function postPlain(path, successText) {
   }, successText);
 }
 
-async function uploadFirmware(event) {
-  event.preventDefault();
-  const file = event.currentTarget.firmware.files[0];
-  if (!file) {
-    setMessage('error', t('message.selectFirmware'));
-    return;
-  }
+async function uploadFirmwareFile(file) {
   await runBusy(async () => {
     state.uploadProgress = {loaded: 0, total: file.size, phase: t('update.phase.uploading')};
     render();
@@ -1059,6 +1053,27 @@ async function uploadFirmware(event) {
   }, t('message.uploadFinished'));
   state.uploadProgress = null;
   render();
+}
+
+async function uploadFirmware(event) {
+  event.preventDefault();
+  const file = event.currentTarget.firmware.files[0];
+  if (!file) {
+    setMessage('error', t('message.selectFirmware'));
+    return;
+  }
+  await uploadFirmwareFile(file);
+}
+
+async function flashDownloadedFirmware() {
+  if (!state.target || state.firmwareUpdate.status !== 'downloaded') return;
+  try {
+    const bytes = await tauriInvoke('load_downloaded_firmware');
+    const file = new File([bytes], state.firmwareUpdate.filename, {type: 'application/octet-stream'});
+    await uploadFirmwareFile(file);
+  } catch (error) {
+    setMessage('error', String(error));
+  }
 }
 
 async function forceUpdate(action) {
@@ -2485,10 +2500,12 @@ function renderUpdate() {
         ${firmwareUpdate.latestVersion ? `<div class="firmware-release-version"><span>${t('firmwareUpdate.latestVersion')}</span><strong>${escapeHtml(firmwareUpdate.latestVersion)}</strong></div>` : ''}
         ${firmwareUpdate.notes ? `<div class="firmware-release-notes"><strong>${t('firmwareUpdate.releaseNotes')}</strong><div class="app-update-notes">${escapeHtml(firmwareUpdate.notes)}</div></div>` : ''}
         ${firmwareUpdate.path ? `<div class="app-update-notes">${escapeHtml(t('firmwareUpdate.savedTo', {path: firmwareUpdate.path}))}</div>` : ''}
+        ${firmwareUpdate.status === 'downloaded' ? `<p class="helper">${t('firmwareUpdate.directFlashHint')}</p>` : ''}
         ${firmwareUpdate.status === 'downloading' ? `<div class="upload-progress"><div class="upload-progress-meta"><span>${t('firmwareUpdate.downloading')}</span><strong>${firmwareProgressPercent}%</strong></div><div class="upload-progress-bar"><span style="width:${firmwareProgressPercent}%"></span></div></div>` : ''}
         <div class="actions">
           <button class="secondary" type="button" data-action="firmware-update-check" ${['checking', 'downloading'].includes(firmwareUpdate.status) ? 'disabled' : ''}>${t('action.checkFirmwareUpdate')}</button>
           ${['available', 'availableUnconnected'].includes(firmwareUpdate.status) ? `<button class="primary" type="button" data-action="firmware-update-download">${t('action.downloadLatestFirmware')}</button>` : ''}
+          ${firmwareUpdate.status === 'downloaded' && state.target ? `<button class="primary" type="button" data-action="firmware-update-flash">${t('action.flashDownloadedFirmware')}</button>` : ''}
         </div>
         <hr>
         ${uploadError}
@@ -2860,6 +2877,7 @@ function wireEvents() {
       if (action === 'app-update-install') installAppUpdate();
       if (action === 'firmware-update-check') checkFirmwareUpdate();
       if (action === 'firmware-update-download') downloadFirmwareUpdate();
+      if (action === 'firmware-update-flash') flashDownloadedFirmware();
       if (action === 'profile-export') exportProfile();
       if (action === 'profile-import') document.querySelector('#profile-file')?.click();
       if (action === 'profile-discard') discardProfileDraft();

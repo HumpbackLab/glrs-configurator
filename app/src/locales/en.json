@@ -37,6 +37,7 @@
     "installUpdate": "Download and Install",
     "checkFirmwareUpdate": "Check for Firmware Updates",
     "downloadLatestFirmware": "Download Latest Firmware",
+    "flashDownloadedFirmware": "Flash Downloaded Firmware",
     "exportProfile": "Export Configuration",
     "importProfile": "Import Configuration",
     "discardProfile": "Discard Imported Values",
@@ -228,6 +229,7 @@
     "description": "While online, check for and download the latest LightFin Nano firmware. You can then connect to the receiver WiFi to compare versions and flash it manually.",
     "downloading": "Downloading and verifying firmware",
     "savedTo": "Firmware saved to {path}",
+    "directFlashHint": "Once connected to the receiver, you can flash this download directly without locating it in Android's file manager.",
     "latestVersion": "Latest firmware version",
     "releaseNotes": "Release Notes",
     "status": {
