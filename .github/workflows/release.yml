@@ -178,7 +178,7 @@ jobs:
     name: Sync release to Gitee
     needs: [build, android]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
 
     steps:
       - name: Check out the latest release sync script
@@ -193,6 +193,7 @@ jobs:
           GITEE_REPOSITORY: ${{ vars.GITEE_REPOSITORY || 'ncer/glrs-configurator' }}
           GITEE_MAX_ASSET_BYTES: 50000000
           REQUIRED_ASSET_SUFFIXES: .apk
+          SKIP_EXISTING_ASSETS: 1
           SKIP_OVERSIZE_ASSETS: 1
         run: |
           ./scripts/sync-github-release-to-gitee.sh \

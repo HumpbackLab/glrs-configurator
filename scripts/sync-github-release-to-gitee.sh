@@ -127,6 +127,12 @@ auth_file="$tmp_dir/gitee-auth-header"
 umask 077
 printf 'Authorization: token %s\n' "$GITEE_TOKEN" > "$auth_file"
 gitee_auth=(--header @"$auth_file")
+curl_retry=(
+  --retry 5
+  --retry-connrefused
+  --retry-max-time 3600
+  --connect-timeout 30
+)
 
 github_headers=(
   -H "Accept: application/vnd.github+json"
@@ -146,6 +152,7 @@ fi
 
 echo "Fetching GitHub release: $github_repo ($requested_tag)"
 curl --fail-with-body --silent --show-error --location \
+  "${curl_retry[@]}" \
   "${github_headers[@]}" "$github_release_url" > "$tmp_dir/github-release.json"
 
 [[ $(jq -r '.draft' "$tmp_dir/github-release.json") != true ]] || die "draft GitHub releases cannot be mirrored"
@@ -170,6 +177,7 @@ encoded_tag=$(jq -rn --arg value "$tag" '$value | @uri')
 gitee_api="https://gitee.com/api/v5/repos/$gitee_repo"
 
 gitee_status=$(curl --silent --show-error --output "$tmp_dir/gitee-release.json" \
+  "${curl_retry[@]}" \
   --write-out '%{http_code}' "${gitee_auth[@]}" \
   "$gitee_api/releases/tags/$encoded_tag")
 if [[ $gitee_status == 200 && $(jq -r 'type' "$tmp_dir/gitee-release.json") == null ]]; then
@@ -189,11 +197,13 @@ case $gitee_status in
     release_id=$(jq -er '.id' "$tmp_dir/gitee-release.json")
     echo "Updating Gitee release: $gitee_repo ($tag)"
     curl --fail-with-body --silent --show-error --request PATCH \
+      "${curl_retry[@]}" \
       "${gitee_auth[@]}" "${release_form[@]}" "$gitee_api/releases/$release_id" > "$tmp_dir/gitee-release.json"
     ;;
   404)
     echo "Creating Gitee release: $gitee_repo ($tag)"
     curl --fail-with-body --silent --show-error --request POST \
+      "${curl_retry[@]}" \
       "${gitee_auth[@]}" "${release_form[@]}" "$gitee_api/releases" > "$tmp_dir/gitee-release.json"
     release_id=$(jq -er '.id' "$tmp_dir/gitee-release.json")
     ;;
@@ -204,6 +214,7 @@ case $gitee_status in
 esac
 
 curl --fail-with-body --silent --show-error --get \
+  "${curl_retry[@]}" \
   "${gitee_auth[@]}" \
   --data-urlencode "per_page=100" \
   "$gitee_api/releases/$release_id/attach_files" > "$tmp_dir/gitee-assets.json"
@@ -232,6 +243,7 @@ while IFS= read -r encoded_asset; do
   local_file="$tmp_dir/$asset_name"
   echo "Downloading GitHub asset: $asset_name"
   curl --fail-with-body --silent --show-error --location \
+    "${curl_retry[@]}" \
     "${github_headers[@]}" "$asset_url" --output "$local_file"
 
   if [[ $asset_name == latest.json && $rewrite_latest == 1 ]]; then
@@ -256,6 +268,7 @@ while IFS= read -r encoded_asset; do
     [[ -z $existing_id ]] || {
       echo "Replacing existing Gitee asset: $asset_name"
       curl --fail-with-body --silent --show-error --request DELETE \
+        "${curl_retry[@]}" \
         "${gitee_auth[@]}" \
         "$gitee_api/releases/$release_id/attach_files/$existing_id" >/dev/null
     }
@@ -263,6 +276,7 @@ while IFS= read -r encoded_asset; do
 
   echo "Uploading Gitee asset: $asset_name"
   curl --fail-with-body --silent --show-error --request POST \
+    "${curl_retry[@]}" \
     "${gitee_auth[@]}" \
     --form "file=@$local_file;filename=$asset_name" \
     "$gitee_api/releases/$release_id/attach_files" >/dev/null
@@ -273,6 +287,7 @@ if [[ -n $manifest_branch ]]; then
   encoded_path=$(jq -rn --arg value "$manifest_path" '$value | @uri' | sed 's/%2F/\//g')
   content_url="$gitee_api/contents/$encoded_path"
   content_status=$(curl --silent --show-error --output "$tmp_dir/gitee-content.json" \
+    "${curl_retry[@]}" \
     --write-out '%{http_code}' --get "${gitee_auth[@]}" \
     --data-urlencode "ref=$manifest_branch" \
     "$content_url")
@@ -288,10 +303,12 @@ if [[ -n $manifest_branch ]]; then
       content_sha=$(jq -er '.sha' "$tmp_dir/gitee-content.json")
       content_form+=(--data-urlencode "sha=$content_sha")
       curl --fail-with-body --silent --show-error --request PUT \
+        "${curl_retry[@]}" \
         "${gitee_auth[@]}" "${content_form[@]}" "$content_url" >/dev/null
       ;;
     404)
       curl --fail-with-body --silent --show-error --request POST \
+        "${curl_retry[@]}" \
         "${gitee_auth[@]}" "${content_form[@]}" "$content_url" >/dev/null
       ;;
     *)
