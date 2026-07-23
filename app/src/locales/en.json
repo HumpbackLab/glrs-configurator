@@ -158,6 +158,18 @@
     "narrow": "750us",
     "failsafe": "Failsafe",
     "position": "Position",
+    "limits": {
+      "heading": "Servo travel",
+      "help": "Set each 50–500Hz PWM output's minimum, center and maximum pulse. Values are applied independently on either side of center for both RC and mixer sources; non-PWM modes and failsafe pulses are unchanged.",
+      "min": "Minimum (us)",
+      "center": "Center (us)",
+      "max": "Maximum (us)"
+    },
+    "wifiOutput": {
+      "heading": "WiFi real-time PWM test",
+      "label": "Enable PWM output in WiFi mode",
+      "help": "Runtime only and reset to off at every power-up. Each time it is enabled, all sliders return to their current configured center values for real-time testing."
+    },
     "sourceRc": "RC",
     "sourceMixer": "Mixer",
     "serial2Protocol": "Serial2 Protocol"

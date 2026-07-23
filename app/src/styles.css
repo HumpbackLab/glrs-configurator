@@ -671,6 +671,79 @@ button:disabled {
   justify-content: center;
 }
 
+.pwm-limits-heading {
+  margin: 22px 0 6px;
+}
+
+.pwm-limits-shell {
+  max-width: 720px;
+}
+
+.pwm-limits-table input {
+  min-width: 96px;
+}
+
+.pwm-wifi-output-option {
+  align-items: flex-start;
+  margin: 10px 0 14px;
+}
+
+.pwm-wifi-output-option small {
+  color: #6b7280;
+  display: block;
+  font-weight: 400;
+  margin-top: 3px;
+}
+
+.pwm-runtime-heading {
+  margin: 22px 0 6px;
+}
+
+.pwm-runtime-controls {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  margin-bottom: 18px;
+}
+
+.pwm-runtime-control {
+  align-items: center;
+  background: #f7f9fb;
+  border: 1px solid #d7dee7;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 82px;
+  padding: 10px 12px;
+}
+
+.pwm-runtime-control label {
+  color: #465160;
+  font-size: 13px;
+  font-weight: 600;
+  grid-column: 1 / -1;
+}
+
+.pwm-runtime-control input[type="range"] {
+  min-width: 0;
+  width: 100%;
+}
+
+.pwm-runtime-control output {
+  background: #fff;
+  border: 1px solid #c9d2dc;
+  border-radius: 5px;
+  color: #263445;
+  display: block;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  min-width: 82px;
+  padding: 5px 7px;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .feature-tx {
   background: #d8eef9;
   color: #31576b;

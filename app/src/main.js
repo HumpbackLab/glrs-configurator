@@ -97,6 +97,9 @@ let debugPollTimer = null;
 let debugPollInFlight = false;
 let debugPollGeneration = 0;
 let debugAircraftView = null;
+let pwmRuntimeUpdateTimer = null;
+let pwmRuntimeUpdateInFlight = false;
+let pwmRuntimePendingValues = null;
 
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -486,6 +489,33 @@ function pwmAvailable() {
   return pwmEntries().length > 0;
 }
 
+function pwmOutputLimits() {
+  const configured = Array.isArray(config().fc_pwm_output_limits) ? config().fc_pwm_output_limits : [];
+  const imported = state.profileDraft?.pwmLimits;
+  return pwmEntries().map((entry, index) => {
+    const values = imported?.[index] ?? configured[index];
+    if (!Array.isArray(values) || values.length < 3) return [1000, 1500, 2000];
+    return [
+      intOrDefault(values[0], 1000),
+      intOrDefault(values[1], 1500),
+      intOrDefault(values[2], 2000),
+    ];
+  });
+}
+
+function pwmOutputWifiEnabled() {
+  return Boolean(config().fc_pwm_output_wifi_enabled);
+}
+
+function pwmOutputWifiValues() {
+  const configured = Array.isArray(config().fc_pwm_output_wifi_values)
+    ? config().fc_pwm_output_wifi_values
+    : [];
+  const limits = pwmOutputLimits();
+  return limits.map((range, index) =>
+    Math.max(range[0], Math.min(range[2], intOrDefault(configured[index], range[1]))));
+}
+
 function decodePwmConfig(rawValue) {
   const raw = Number(rawValue) || 0;
   return {
@@ -778,6 +808,7 @@ async function savePwm(event) {
   const form = event.currentTarget;
   const entries = pwmEntries();
   const usedExclusiveModes = new Map();
+  const limits = pwmOutputLimits();
   const nextPwm = entries.map((entry, index) => {
     const mode = intOrDefault(form.elements[`pwm-mode-${index}`]?.value, 0);
     const decoded = {
@@ -798,10 +829,20 @@ async function savePwm(event) {
     }
     return encodePwmConfig(decoded);
   });
+  const nextPwmLimits = entries.map((entry, index) => {
+    const min = intOrDefault(form.elements[`pwm-limit-min-${index}`]?.value, limits[index][0]);
+    const center = intOrDefault(form.elements[`pwm-limit-center-${index}`]?.value, limits[index][1]);
+    const max = intOrDefault(form.elements[`pwm-limit-max-${index}`]?.value, limits[index][2]);
+    if (min < 500 || max > 2500 || min >= center || center >= max) {
+      throw new Error(`${t('message.invalidRange')}: ${t('pwm.output')} ${index + 1}`);
+    }
+    return [min, center, max];
+  });
 
   const payload = {
     ...config(),
     pwm: nextPwm,
+    fc_pwm_output_limits: nextPwmLimits,
     'serial1-protocol': pwmSerial2Active() ? configValue('serial1-protocol', 0) : 0,
   };
 
@@ -814,6 +855,7 @@ async function savePwm(event) {
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(payload)});
     if (state.profileDraft) {
       state.profileDraft.pwm = null;
+      state.profileDraft.pwmLimits = null;
       state.profileDraft.serial1Protocol = null;
       if (!state.profileDraft.flight) state.profileDraft = null;
     }
@@ -1341,8 +1383,16 @@ function updateDebugAircraftAttitude(sample) {
 
 function profilePwmOutputs() {
   const form = document.querySelector('#pwm-form');
+  const limits = pwmOutputLimits();
   return pwmEntries().map((entry, index) => {
-    if (!form) return decodePwmConfig(entry.config);
+    if (!form) {
+      return {
+        ...decodePwmConfig(entry.config),
+        min: limits[index][0],
+        center: limits[index][1],
+        max: limits[index][2],
+      };
+    }
     return {
       mode: intOrDefault(form.elements[`pwm-mode-${index}`]?.value, 0),
       inputChannel: intOrDefault(form.elements[`pwm-input-${index}`]?.value, 0),
@@ -1352,6 +1402,9 @@ function profilePwmOutputs() {
       failsafeMode: intOrDefault(form.elements[`pwm-failsafe-mode-${index}`]?.value, 0),
       failsafe: intOrDefault(form.elements[`pwm-failsafe-${index}`]?.value, 1500),
       mixerMode: intOrDefault(form.elements[`pwm-source-${index}`]?.value, 0) === 1,
+      min: intOrDefault(form.elements[`pwm-limit-min-${index}`]?.value, limits[index][0]),
+      center: intOrDefault(form.elements[`pwm-limit-center-${index}`]?.value, limits[index][1]),
+      max: intOrDefault(form.elements[`pwm-limit-max-${index}`]?.value, limits[index][2]),
     };
   });
 }
@@ -1481,7 +1534,12 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
   if (profile.version !== PROFILE_VERSION) throw new Error(t('error.profileVersion', {version: profile.version}));
   if (!profile.pwm && !profile.flight) throw new Error(t('error.profileEmpty'));
 
-  const draft = {pwm: null, serial1Protocol: null, flight: null};
+  const draft = {
+    pwm: null,
+    pwmLimits: null,
+    serial1Protocol: null,
+    flight: null,
+  };
   const warnings = [];
   const currentTarget = state.target?.target || config().target || '';
   if (profile.compatibility?.target && currentTarget && profile.compatibility.target !== currentTarget) {
@@ -1496,6 +1554,7 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
       throw new Error(t('error.profilePwmCount', {source: profile.pwm.outputs?.length ?? 0, target: maximumOutputs}));
     }
     const exclusive = new Set();
+    draft.pwmLimits = [];
     draft.pwm = profile.pwm.outputs.map((output, index) => {
       const mode = requireProfileNumber(output?.mode, `PWM ${index + 1} mode`, 0, pwmModes.length - 1, true);
       if (deviceAware && !pwmModeAllowed(Number(deviceEntries[index].features) || 0, mode)) {
@@ -1505,6 +1564,13 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
         if (exclusive.has(mode)) throw new Error(t('error.pwmExclusive', {mode: pwmModes[mode], output: index + 1}));
         exclusive.add(mode);
       }
+      const min = requireProfileNumber(output.min ?? 1000, `PWM ${index + 1} min`, 500, 2500, true);
+      const center = requireProfileNumber(output.center ?? 1500, `PWM ${index + 1} center`, 500, 2500, true);
+      const max = requireProfileNumber(output.max ?? 2000, `PWM ${index + 1} max`, 500, 2500, true);
+      if (min >= center || center >= max) {
+        throw new Error(t('error.profileValue', {label: `PWM ${index + 1} limits`}));
+      }
+      draft.pwmLimits.push([min, center, max]);
       return encodePwmConfig({
         mode,
         inputChannel: requireProfileNumber(output.inputChannel, `PWM ${index + 1} inputChannel`, 0, 15, true),
@@ -2033,6 +2099,8 @@ function renderModel() {
 
 function renderPwm() {
   const entries = pwmEntries();
+  const outputLimits = pwmOutputLimits();
+  const runtimeValues = pwmOutputWifiValues();
   const offline = !pwmConnected();
   if (!entries.length) {
     return `
@@ -2091,6 +2159,48 @@ function renderPwm() {
               }).join('')}
             </tbody>
           </table>
+        </div>
+        <h3 class="pwm-limits-heading">${t('pwm.limits.heading')}</h3>
+        <div class="helper pwm-help">${t('pwm.limits.help')}</div>
+        <div class="table-shell pwm-limits-shell">
+          <table class="grid-table pwm-limits-table">
+            <thead>
+              <tr>
+                <th>${t('pwm.output')}</th>
+                <th>${t('pwm.limits.min')}</th>
+                <th>${t('pwm.limits.center')}</th>
+                <th>${t('pwm.limits.max')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${entries.map((entry, index) => `
+                <tr>
+                  <th scope="row" data-label="${escapeHtml(t('pwm.output'))}">${index + 1}</th>
+                  <td data-label="${escapeHtml(t('pwm.limits.min'))}"><input name="pwm-limit-min-${index}" data-pwm-limit="${index}" type="number" min="500" max="2498" value="${escapeHtml(outputLimits[index][0])}"></td>
+                  <td data-label="${escapeHtml(t('pwm.limits.center'))}"><input name="pwm-limit-center-${index}" data-pwm-limit="${index}" type="number" min="501" max="2499" value="${escapeHtml(outputLimits[index][1])}"></td>
+                  <td data-label="${escapeHtml(t('pwm.limits.max'))}"><input name="pwm-limit-max-${index}" data-pwm-limit="${index}" type="number" min="502" max="2500" value="${escapeHtml(outputLimits[index][2])}"></td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+        <h3 class="pwm-runtime-heading">${t('pwm.wifiOutput.heading')}</h3>
+        <div class="check pwm-wifi-output-option">
+          <input id="pwm-output-wifi-enabled" name="pwm_output_wifi_enabled" type="checkbox" ${checked(pwmOutputWifiEnabled())}>
+          <label for="pwm-output-wifi-enabled">
+            ${t('pwm.wifiOutput.label')}
+            <small>${t('pwm.wifiOutput.help')}</small>
+          </label>
+        </div>
+        <div class="pwm-runtime-controls">
+          ${entries.map((entry, index) => `
+            <div class="pwm-runtime-control">
+              <label for="pwm-runtime-${index}">${t('pwm.output')} ${index + 1} · GPIO ${escapeHtml(entry.pin)}</label>
+              <input id="pwm-runtime-${index}" name="pwm-runtime-${index}" data-pwm-runtime="${index}" type="range"
+                min="${escapeHtml(outputLimits[index][0])}" max="${escapeHtml(outputLimits[index][2])}" step="1"
+                value="${escapeHtml(runtimeValues[index])}"
+                ${disabled(!pwmOutputWifiEnabled() || decodePwmConfig(entry.config).mode > 5)}>
+              <output data-pwm-runtime-value="${index}" for="pwm-runtime-${index}">${escapeHtml(runtimeValues[index])} us</output>
+            </div>`).join('')}
         </div>
         <div class="row" id="serial1-config-row" style="display:${serial2Visible ? 'grid' : 'none'};">
           <label for="serial1-protocol">${t('pwm.serial2Protocol')}</label>
@@ -2581,6 +2691,92 @@ function wirePwmForm() {
   if (!form) return;
 
   const rows = pwmEntries().map((entry, index) => ({entry, index}));
+  const wifiOutputToggle = form.elements.pwm_output_wifi_enabled;
+
+  function runtimeValuesFromForm() {
+    return rows.map(({index}) =>
+      intOrDefault(form.elements[`pwm-runtime-${index}`]?.value, pwmOutputWifiValues()[index]));
+  }
+
+  function syncRuntimeControls() {
+    const enabled = Boolean(wifiOutputToggle?.checked);
+    rows.forEach(({index}) => {
+      const slider = form.elements[`pwm-runtime-${index}`];
+      const mode = intOrDefault(form.elements[`pwm-mode-${index}`]?.value, 0);
+      if (slider) slider.disabled = !enabled || mode > 5;
+    });
+  }
+
+  async function setWifiOutputEnabled() {
+    if (!wifiOutputToggle) return;
+    const enabled = wifiOutputToggle.checked;
+    if (pwmRuntimeUpdateTimer) {
+      window.clearTimeout(pwmRuntimeUpdateTimer);
+      pwmRuntimeUpdateTimer = null;
+      pwmRuntimePendingValues = null;
+    }
+    if (enabled) {
+      rows.forEach(({index}) => {
+        const center = intOrDefault(
+          form.elements[`pwm-limit-center-${index}`]?.value,
+          pwmOutputLimits()[index][1],
+        );
+        const slider = form.elements[`pwm-runtime-${index}`];
+        if (slider) slider.value = String(center);
+        const output = form.querySelector(`[data-pwm-runtime-value="${index}"]`);
+        if (output) output.textContent = `${center} us`;
+      });
+    }
+    wifiOutputToggle.disabled = true;
+    syncRuntimeControls();
+    try {
+      const values = runtimeValuesFromForm();
+      await apiFetch('/pwm-output', {
+        method: 'POST',
+        body: JSON.stringify({enabled, values}),
+      });
+      config().fc_pwm_output_wifi_enabled = enabled;
+      config().fc_pwm_output_wifi_values = values;
+    } catch (error) {
+      wifiOutputToggle.checked = !enabled;
+      setMessage('error', error.message || String(error));
+      return;
+    } finally {
+      wifiOutputToggle.disabled = false;
+      syncRuntimeControls();
+    }
+  }
+
+  function scheduleRuntimeOutputUpdate() {
+    const values = runtimeValuesFromForm();
+    config().fc_pwm_output_wifi_values = values;
+    pwmRuntimePendingValues = values;
+    if (pwmRuntimeUpdateTimer || pwmRuntimeUpdateInFlight) return;
+    pwmRuntimeUpdateTimer = window.setTimeout(flushRuntimeOutputUpdate, 50);
+  }
+
+  async function flushRuntimeOutputUpdate() {
+    pwmRuntimeUpdateTimer = null;
+    if (pwmRuntimeUpdateInFlight || !pwmRuntimePendingValues) return;
+    const values = pwmRuntimePendingValues;
+    pwmRuntimePendingValues = null;
+    pwmRuntimeUpdateInFlight = true;
+    try {
+      await apiFetch('/pwm-output', {
+        method: 'POST',
+        body: JSON.stringify({values}),
+        timeout: 2000,
+      });
+    } catch (error) {
+      pwmRuntimePendingValues = null;
+      setMessage('error', error.message || String(error));
+    } finally {
+      pwmRuntimeUpdateInFlight = false;
+      if (pwmRuntimePendingValues && !pwmRuntimeUpdateTimer) {
+        pwmRuntimeUpdateTimer = window.setTimeout(flushRuntimeOutputUpdate, 50);
+      }
+    }
+  }
 
   function syncExclusiveOptions() {
     const selectedModes = new Map();
@@ -2619,6 +2815,9 @@ function wirePwmForm() {
     });
     if (polarityInput) polarityInput.disabled = false;
     failsafeInput.disabled = serialMode || intOrDefault(failsafeModeInput.value, 0) !== 0;
+    form.querySelectorAll(`[data-pwm-limit="${index}"]`).forEach((input) => {
+      input.disabled = mode > 5;
+    });
   }
 
   function syncSerial2Visibility() {
@@ -2632,6 +2831,7 @@ function wirePwmForm() {
     form.elements[`pwm-mode-${index}`]?.addEventListener('change', () => {
       syncExclusiveOptions();
       syncRow(index);
+      syncRuntimeControls();
       syncSerial2Visibility();
     });
     form.elements[`pwm-failsafe-mode-${index}`]?.addEventListener('change', () => {
@@ -2641,9 +2841,18 @@ function wirePwmForm() {
       syncRow(index);
     });
     syncRow(index);
+    const runtimeSlider = form.elements[`pwm-runtime-${index}`];
+    runtimeSlider?.addEventListener('input', () => {
+      const value = intOrDefault(runtimeSlider.value, 1500);
+      const output = form.querySelector(`[data-pwm-runtime-value="${index}"]`);
+      if (output) output.textContent = `${value} us`;
+      scheduleRuntimeOutputUpdate();
+    });
   });
 
+  wifiOutputToggle?.addEventListener('change', setWifiOutputEnabled);
   syncExclusiveOptions();
+  syncRuntimeControls();
   syncSerial2Visibility();
 }
 

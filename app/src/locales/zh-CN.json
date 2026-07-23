@@ -158,6 +158,18 @@
     "narrow": "750us",
     "failsafe": "失控保护",
     "position": "位置",
+    "limits": {
+      "heading": "舵机行程",
+      "help": "分别设置每路 50–500Hz PWM 输出的最小、中位和最大脉宽；RC 与混控器来源都会在中位两侧独立线性映射，非 PWM 模式和失控保护脉宽不受影响。",
+      "min": "最小值 (us)",
+      "center": "中位值 (us)",
+      "max": "最大值 (us)"
+    },
+    "wifiOutput": {
+      "heading": "WiFi 实时 PWM 调试",
+      "label": "WiFi 模式下启用 PWM 输出",
+      "help": "仅当前运行周期有效，每次上电都会恢复关闭；每次重新启用时，所有滑块都会回到当前配置的中位值，便于实时调试。"
+    },
     "sourceRc": "RC",
     "sourceMixer": "混控器",
     "serial2Protocol": "Serial2 协议"
