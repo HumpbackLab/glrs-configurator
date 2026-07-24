@@ -901,6 +901,16 @@ async function saveFlight(event) {
     nextConfig.fc_arm_range = [armStart, armEnd];
     nextConfig.fc_rate_pid = readNumGrid(form, 'fc_rate_pid', 3, 4);
     nextConfig.fc_angle_pid = readNumGrid(form, 'fc_angle_pid', 3, 4);
+    const dtermLpfHz = intOrDefault(form.fc_dterm_lpf_hz.value, 20);
+    if (dtermLpfHz < 0 || dtermLpfHz > 100 || (dtermLpfHz > 0 && dtermLpfHz < 5)) {
+      throw new Error(t('error.invalidDtermLpf'));
+    }
+    nextConfig.fc_dterm_lpf_hz = dtermLpfHz;
+    const gyroLpfHz = intOrDefault(form.fc_gyro_lpf_hz.value, 30);
+    if (gyroLpfHz < 0 || gyroLpfHz > 100 || (gyroLpfHz > 0 && gyroLpfHz < 5)) {
+      throw new Error(t('error.invalidGyroLpf'));
+    }
+    nextConfig.fc_gyro_lpf_hz = gyroLpfHz;
     nextConfig.fc_mixer = readNumGrid(form, 'fc_mixer', motorCount(), 4);
     nextConfig.fc_mixer_servos = readMixerServos(form, motorCount());
     nextConfig.fc_orientation = orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw);
@@ -1432,6 +1442,8 @@ function profileFlightConfig() {
       },
       ratePid: flightConfigValue('fc_rate_pid', []),
       anglePid: flightConfigValue('fc_angle_pid', []),
+      dtermLpfHz: flightConfigValue('fc_dterm_lpf_hz', 20),
+      gyroLpfHz: flightConfigValue('fc_gyro_lpf_hz', 30),
       mixer: flightConfigValue('fc_mixer', []),
       mixerServos: flightConfigValue('fc_mixer_servos', []),
       orientation: orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw),
@@ -1459,6 +1471,8 @@ function profileFlightConfig() {
     },
     ratePid: readNumGrid(form, 'fc_rate_pid', 3, 4),
     anglePid: readNumGrid(form, 'fc_angle_pid', 3, 4),
+    dtermLpfHz: intOrDefault(form.fc_dterm_lpf_hz.value, 20),
+    gyroLpfHz: intOrDefault(form.fc_gyro_lpf_hz.value, 30),
     mixer: readNumGrid(form, 'fc_mixer', motorCount(), 4),
     mixerServos: readMixerServos(form, motorCount()),
     orientation: orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw),
@@ -1623,6 +1637,14 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
       modeConditions[mode] = values;
     }
     const arm = profile.flight.arm || {};
+    const dtermLpfHz = requireProfileNumber(profile.flight.dtermLpfHz ?? 20, 'D-term LPF', 0, 100, true);
+    if (dtermLpfHz > 0 && dtermLpfHz < 5) {
+      throw new Error(t('error.invalidDtermLpf'));
+    }
+    const gyroLpfHz = requireProfileNumber(profile.flight.gyroLpfHz ?? 30, 'Gyro LPF', 0, 100, true);
+    if (gyroLpfHz > 0 && gyroLpfHz < 5) {
+      throw new Error(t('error.invalidGyroLpf'));
+    }
     const orientation = validateOrientationMatrix(
       requireProfileArray(profile.flight.orientation, 'orientation', 9, -1.1, 1.1),
     );
@@ -1633,6 +1655,8 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
       fc_arm_range: validateProfileRange(arm.range, 'ARM range'),
       fc_rate_pid: requireProfileArray(profile.flight.ratePid, 'Rate PID', 12, -327.68, 327.67),
       fc_angle_pid: requireProfileArray(profile.flight.anglePid, 'Angle PID', 12, -327.68, 327.67),
+      fc_dterm_lpf_hz: dtermLpfHz,
+      fc_gyro_lpf_hz: gyroLpfHz,
       fc_mixer: mixer.map(Number),
       fc_mixer_count: mixer.length,
       fc_mixer_servos: Array.from({length: mixerOutputCount}, (_, index) => Boolean(mixerServos[index])),
@@ -2380,6 +2404,8 @@ function renderFlight() {
   const motors = motorCount();
   const ratePid = flightConfigValue('fc_rate_pid', []);
   const anglePid = flightConfigValue('fc_angle_pid', []);
+  const dtermLpfHz = flightConfigValue('fc_dterm_lpf_hz', 20);
+  const gyroLpfHz = flightConfigValue('fc_gyro_lpf_hz', 30);
   const mixer = flightConfigValue('fc_mixer', []);
   const mixerServos = flightConfigValue('fc_mixer_servos', []);
   const modeConditions = flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 1700]});
@@ -2418,6 +2444,16 @@ function renderFlight() {
           ${renderActivationRange('arm', 'ARM', t('flight.armRangeDescription'), armRange, '#d97706', !armEnabled)}
         </div>
         <div class="notice">${t('notice.rateLoop')}</div>
+        <div class="row">
+          <label for="fc_gyro_lpf_hz">${t('flight.gyroLpf')}</label>
+          <input id="fc_gyro_lpf_hz" name="fc_gyro_lpf_hz" type="number" min="0" max="100" step="1" value="${escapeHtml(gyroLpfHz)}">
+          <div class="helper">${t('flight.gyroLpfHelp')}</div>
+        </div>
+        <div class="row">
+          <label for="fc_dterm_lpf_hz">${t('flight.dtermLpf')}</label>
+          <input id="fc_dterm_lpf_hz" name="fc_dterm_lpf_hz" type="number" min="0" max="100" step="1" value="${escapeHtml(dtermLpfHz)}">
+          <div class="helper">${t('flight.dtermLpfHelp')}</div>
+        </div>
         <div class="row">
           <label>${t('flight.ratePid')}</label>
           ${renderNumGrid('fc_rate_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], ratePid, {rowHeader: t('flight.axis')})}
