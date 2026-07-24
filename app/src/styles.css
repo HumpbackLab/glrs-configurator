@@ -278,6 +278,15 @@ button:disabled {
   color: #6b7280;
 }
 
+.grid-table .grid-check-cell {
+  min-width: 64px;
+}
+
+.grid-table .grid-check-cell input[type="checkbox"] {
+  min-height: auto;
+  width: auto;
+}
+
 .grid-table select:disabled {
   background: #f3f4f6;
   color: #6b7280;

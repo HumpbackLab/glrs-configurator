@@ -600,7 +600,10 @@ function numCellValue(values, index) {
   return Number.isFinite(value) ? value : 0;
 }
 
-function renderNumGridRow(prefix, rowLabel, colCount, values, rowIndex, disabled = '') {
+function renderNumGridRow(prefix, rowLabel, colCount, values, rowIndex, disabled = '', options = {}) {
+  const flagCell = options.flagName
+    ? `<td class="grid-check-cell"><input type="checkbox" name="${escapeHtml(options.flagName)}-${rowIndex}" ${checked(Boolean(options.flagValues?.[rowIndex]))} ${disabled}></td>`
+    : '';
   return `
     <tr>
       <th scope="row">${escapeHtml(rowLabel)}</th>
@@ -608,6 +611,7 @@ function renderNumGridRow(prefix, rowLabel, colCount, values, rowIndex, disabled
         const index = rowIndex * colCount + colIndex;
         return `<td><input type="number" step="any" inputmode="decimal" data-grid="${prefix}" data-row="${rowIndex}" data-col="${colIndex}" value="${escapeHtml(numCellValue(values, index))}" ${disabled}></td>`;
       }).join('')}
+      ${flagCell}
     </tr>`;
 }
 
@@ -621,10 +625,11 @@ function renderNumGrid(prefix, rowLabels, colLabels, values, options = {}) {
           <tr>
             <th>${escapeHtml(options.rowHeader || '')}</th>
             ${colLabels.map((label) => `<th>${escapeHtml(label)}</th>`).join('')}
+            ${options.flagName ? `<th>${escapeHtml(options.flagLabel || '')}</th>` : ''}
           </tr>
         </thead>
         <tbody>
-          ${rowLabels.map((rowLabel, rowIndex) => renderNumGridRow(prefix, rowLabel, colLabels.length, values, rowIndex, disabled)).join('')}
+          ${rowLabels.map((rowLabel, rowIndex) => renderNumGridRow(prefix, rowLabel, colLabels.length, values, rowIndex, disabled, options)).join('')}
         </tbody>
       </table>
       ${note}
@@ -647,6 +652,11 @@ function readNumGrid(form, prefix, rowCount, colCount) {
     }
   }
   return values;
+}
+
+function readMixerServos(form, rowCount) {
+  return Array.from({length: rowCount}, (_, row) =>
+    Boolean(form.elements[`fc-mixer-servo-${row}`]?.checked));
 }
 
 function bindingUidPreview() {
@@ -892,6 +902,7 @@ async function saveFlight(event) {
     nextConfig.fc_rate_pid = readNumGrid(form, 'fc_rate_pid', 3, 4);
     nextConfig.fc_angle_pid = readNumGrid(form, 'fc_angle_pid', 3, 4);
     nextConfig.fc_mixer = readNumGrid(form, 'fc_mixer', motorCount(), 4);
+    nextConfig.fc_mixer_servos = readMixerServos(form, motorCount());
     nextConfig.fc_orientation = orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw);
     delete nextConfig.pwm;
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(nextConfig)});
@@ -1422,6 +1433,7 @@ function profileFlightConfig() {
       ratePid: flightConfigValue('fc_rate_pid', []),
       anglePid: flightConfigValue('fc_angle_pid', []),
       mixer: flightConfigValue('fc_mixer', []),
+      mixerServos: flightConfigValue('fc_mixer_servos', []),
       orientation: orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw),
     };
   }
@@ -1448,6 +1460,7 @@ function profileFlightConfig() {
     ratePid: readNumGrid(form, 'fc_rate_pid', 3, 4),
     anglePid: readNumGrid(form, 'fc_angle_pid', 3, 4),
     mixer: readNumGrid(form, 'fc_mixer', motorCount(), 4),
+    mixerServos: readMixerServos(form, motorCount()),
     orientation: orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw),
   };
 }
@@ -1595,6 +1608,11 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
       throw new Error(t('error.profileMixerLength'));
     }
     mixer.forEach((value, index) => requireProfileNumber(value, `mixer[${index}]`, -1000, 1000));
+    const mixerOutputCount = mixer.length / 4;
+    const mixerServos = profile.flight.mixerServos ?? Array(mixerOutputCount).fill(false);
+    if (!Array.isArray(mixerServos) || mixerServos.length > mixerOutputCount) {
+      throw new Error(t('error.profileMixerServosLength'));
+    }
     const modeConditions = {};
     for (const mode of ['rate', 'angle']) {
       const condition = profile.flight.modeConditions?.[mode];
@@ -1617,6 +1635,7 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
       fc_angle_pid: requireProfileArray(profile.flight.anglePid, 'Angle PID', 12, -327.68, 327.67),
       fc_mixer: mixer.map(Number),
       fc_mixer_count: mixer.length,
+      fc_mixer_servos: Array.from({length: mixerOutputCount}, (_, index) => Boolean(mixerServos[index])),
       fc_orientation: orientation,
     };
   }
@@ -2231,10 +2250,12 @@ function changeMixerRowCount(delta) {
     state.extraMixerRows = (state.extraMixerRows || 0) + 1;
     tbody.insertAdjacentHTML('beforeend', renderNumGridRow(
       'fc_mixer',
-      `${t('flight.motor')} ${rowIndex + 1}`,
+      `${t('flight.output')} ${rowIndex + 1}`,
       4,
       [],
       rowIndex,
+      '',
+      {flagName: 'fc-mixer-servo', flagValues: []},
     ));
   } else if (state.extraMixerRows > 0) {
     tbody.lastElementChild?.remove();
@@ -2244,7 +2265,7 @@ function changeMixerRowCount(delta) {
   const motors = motorCount();
   const countLabel = document.querySelector('#mixer-motor-count');
   if (countLabel) {
-    countLabel.textContent = `${motors} ${motors !== 1 ? t('flight.motors') : t('flight.motor')}`;
+    countLabel.textContent = `${motors} ${motors !== 1 ? t('flight.outputs') : t('flight.output')}`;
   }
   const removeButton = document.querySelector('[data-action="remove-motor"]');
   if (removeButton) removeButton.disabled = state.busy || state.extraMixerRows <= 0;
@@ -2360,6 +2381,7 @@ function renderFlight() {
   const ratePid = flightConfigValue('fc_rate_pid', []);
   const anglePid = flightConfigValue('fc_angle_pid', []);
   const mixer = flightConfigValue('fc_mixer', []);
+  const mixerServos = flightConfigValue('fc_mixer_servos', []);
   const modeConditions = flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 1700]});
   const armEnabled = flightConfigValue('fc_arm_enabled', false);
   const armChannel = flightConfigValue('fc_arm_channel', 5);
@@ -2406,11 +2428,17 @@ function renderFlight() {
         </div>
         <div class="row">
           <label>${t('flight.mixer')}</label>
-          ${renderNumGrid('fc_mixer', Array.from({length: motors}, (_, i) => `${t('flight.motor')} ${i + 1}`), [t('flight.throttle'), t('flight.roll'), t('flight.pitch'), t('flight.yaw')], mixer, {rowHeader: t('flight.motor')})}
-          <div class="helper" id="mixer-motor-count">${motors} ${motors !== 1 ? t('flight.motors') : t('flight.motor')}</div>
+          ${renderNumGrid('fc_mixer', Array.from({length: motors}, (_, i) => `${t('flight.output')} ${i + 1}`), [t('flight.throttle'), t('flight.roll'), t('flight.pitch'), t('flight.yaw')], mixer, {
+            rowHeader: t('flight.output'),
+            flagName: 'fc-mixer-servo',
+            flagLabel: t('flight.isServo'),
+            flagValues: mixerServos,
+          })}
+          <div class="helper">${t('flight.mixerServoHelp')}</div>
+          <div class="helper" id="mixer-motor-count">${motors} ${motors !== 1 ? t('flight.outputs') : t('flight.output')}</div>
           <div class="actions">
-            <button class="secondary" type="button" data-action="add-motor" ${state.busy ? 'disabled' : ''}>${t('action.addMotor')}</button>
-            <button class="secondary" type="button" data-action="remove-motor" ${state.busy || state.extraMixerRows <= 0 ? 'disabled' : ''}>${t('action.removeMotor')}</button>
+            <button class="secondary" type="button" data-action="add-motor" ${state.busy ? 'disabled' : ''}>${t('action.addOutput')}</button>
+            <button class="secondary" type="button" data-action="remove-motor" ${state.busy || state.extraMixerRows <= 0 ? 'disabled' : ''}>${t('action.removeOutput')}</button>
           </div>
         </div>
         <div class="row">
