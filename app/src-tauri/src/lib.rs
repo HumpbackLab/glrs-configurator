@@ -334,6 +334,7 @@ mod firmware_updates {
         "https://api.github.com/repos/HumpbackLab/Gyro-ELRS/releases/tags/";
     const GITEE_RELEASE_API: &str = "https://gitee.com/api/v5/repos/ncer/Gyro-ELRS/releases/tags/";
     const MAX_FIRMWARE_SIZE: u64 = 8 * 1024 * 1024;
+    const DOWNLOADED_FIRMWARE_STATE_FILE: &str = "downloaded-firmware.json";
 
     #[derive(Deserialize)]
     struct FirmwareManifest {
@@ -395,11 +396,15 @@ mod firmware_updates {
         update: Option<FirmwareMetadata>,
     }
 
-    #[derive(Clone, Serialize)]
+    #[derive(Clone, Deserialize, Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct DownloadedFirmware {
         path: String,
         filename: String,
+        product_name: String,
+        target: String,
+        version: String,
+        size: u64,
     }
 
     #[derive(Clone, Serialize)]
@@ -419,9 +424,10 @@ mod firmware_updates {
     struct PendingFirmware {
         entry: FirmwareEntry,
         source: String,
+        version: String,
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, Deserialize, Serialize)]
     struct StoredDownloadedFirmware {
         result: DownloadedFirmware,
         size: u64,
@@ -582,6 +588,26 @@ mod firmware_updates {
         download_dir.join(format!("{stem}-download.{extension}"))
     }
 
+    fn downloaded_firmware_state_path(app: &AppHandle) -> Result<PathBuf, String> {
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| error.to_string())?;
+        fs::create_dir_all(&app_data_dir).map_err(|error| error.to_string())?;
+        Ok(app_data_dir.join(DOWNLOADED_FIRMWARE_STATE_FILE))
+    }
+
+    fn validate_stored_firmware(firmware: &StoredDownloadedFirmware) -> Result<(), String> {
+        let bytes = fs::read(&firmware.result.path).map_err(|error| error.to_string())?;
+        let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+        if bytes.len() as u64 != firmware.size
+            || actual_sha256 != firmware.sha256.to_ascii_lowercase()
+        {
+            return Err("downloaded firmware failed size or SHA-256 verification".into());
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -740,7 +766,11 @@ mod firmware_updates {
             .0
             .lock()
             .map_err(|_| "firmware update state poisoned")? =
-            update.as_ref().map(|_| PendingFirmware { entry, source });
+            update.as_ref().map(|_| PendingFirmware {
+                entry,
+                source,
+                version: manifest.version.clone(),
+            });
 
         Ok(FirmwareCheckResult {
             current_version,
@@ -825,16 +855,25 @@ mod firmware_updates {
                 .unwrap_or(&pending.entry.filename)
                 .to_string(),
             path: destination.to_string_lossy().to_string(),
+            product_name: pending.entry.product_name,
+            target: pending.entry.target,
+            version: pending.version,
+            size: pending.entry.size,
         };
         let stored_downloaded_firmware = StoredDownloadedFirmware {
             result: downloaded_firmware_result.clone(),
             size: pending.entry.size,
             sha256: pending.entry.sha256,
         };
+        let serialized_state =
+            serde_json::to_vec(&stored_downloaded_firmware).map_err(|error| error.to_string())?;
         *downloaded_firmware
             .0
             .lock()
             .map_err(|_| "downloaded firmware state poisoned")? = Some(stored_downloaded_firmware);
+        if let Ok(state_path) = downloaded_firmware_state_path(&app) {
+            let _ = fs::write(state_path, serialized_state);
+        }
         Ok(downloaded_firmware_result)
     }
 
@@ -848,14 +887,40 @@ mod firmware_updates {
             .map_err(|_| "downloaded firmware state poisoned")?
             .clone()
             .ok_or_else(|| "no downloaded firmware is available".to_string())?;
+        validate_stored_firmware(&firmware)?;
         let bytes = fs::read(&firmware.result.path).map_err(|error| error.to_string())?;
-        let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
-        if bytes.len() as u64 != firmware.size
-            || actual_sha256 != firmware.sha256.to_ascii_lowercase()
-        {
-            return Err("downloaded firmware failed size or SHA-256 verification".into());
-        }
         Ok(Response::new(bytes))
+    }
+
+    #[tauri::command]
+    pub fn get_downloaded_firmware(
+        app: AppHandle,
+        downloaded_firmware: State<'_, DownloadedFirmwareUpdate>,
+    ) -> Result<Option<DownloadedFirmware>, String> {
+        let mut firmware = downloaded_firmware
+            .0
+            .lock()
+            .map_err(|_| "downloaded firmware state poisoned")?
+            .clone();
+        if firmware.is_none() {
+            let state_path = downloaded_firmware_state_path(&app)?;
+            if state_path.is_file() {
+                let serialized = fs::read(state_path).map_err(|error| error.to_string())?;
+                firmware =
+                    Some(serde_json::from_slice(&serialized).map_err(|error| error.to_string())?);
+            }
+        }
+        let Some(firmware) = firmware else {
+            return Ok(None);
+        };
+        if validate_stored_firmware(&firmware).is_err() {
+            return Ok(None);
+        }
+        *downloaded_firmware
+            .0
+            .lock()
+            .map_err(|_| "downloaded firmware state poisoned")? = Some(firmware.clone());
+        Ok(Some(firmware.result))
     }
 }
 
@@ -888,7 +953,8 @@ pub fn run() {
             app_updates::install_app_update,
             firmware_updates::check_firmware_update,
             firmware_updates::download_firmware_update,
-            firmware_updates::load_downloaded_firmware
+            firmware_updates::load_downloaded_firmware,
+            firmware_updates::get_downloaded_firmware
         ])
         .run(tauri::generate_context!())
         .expect("error while running Gyro ELRS Configurator");

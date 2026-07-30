@@ -60,6 +60,7 @@ const state = {
     downloaded: 0,
     total: 0,
     path: '',
+    compatible: null,
     error: '',
   },
   extraMixerRows: 0,
@@ -698,9 +699,12 @@ async function loadDevice() {
   state.configResponse = configResponse;
   state.hardware = hardwareResponse;
   const currentFirmwareVersion = (target?.version || '').split(/\s+/, 1)[0];
+  const hasDownloadedFirmware = state.firmwareUpdate.status === 'downloaded'
+    && Boolean(state.firmwareUpdate.path)
+    && Boolean(state.firmwareUpdate.filename);
   const cachedFirmwareMatches = state.firmwareUpdate.latestVersion
     && state.firmwareUpdate.target
-    && state.firmwareUpdate.target === (target?.target || '');
+    && state.firmwareUpdate.target.trim().toLowerCase() === (target?.target || '').trim().toLowerCase();
   if (cachedFirmwareMatches) {
     state.firmwareUpdate = {
       ...state.firmwareUpdate,
@@ -708,6 +712,15 @@ async function loadDevice() {
         ? 'current'
         : (state.firmwareUpdate.path ? 'downloaded' : 'available'),
       currentVersion: currentFirmwareVersion,
+      compatible: true,
+      error: '',
+    };
+  } else if (hasDownloadedFirmware) {
+    state.firmwareUpdate = {
+      ...state.firmwareUpdate,
+      status: 'downloaded',
+      currentVersion: currentFirmwareVersion,
+      compatible: false,
       error: '',
     };
   } else {
@@ -723,6 +736,7 @@ async function loadDevice() {
       downloaded: 0,
       total: 0,
       path: '',
+      compatible: null,
       error: '',
     };
   }
@@ -1265,11 +1279,42 @@ async function downloadFirmwareUpdate() {
       total: total || downloaded,
       filename: result.filename,
       path: result.path,
+      productName: result.productName || state.firmwareUpdate.productName,
+      target: result.target || state.firmwareUpdate.target,
+      latestVersion: result.version || state.firmwareUpdate.latestVersion,
+      compatible: state.target
+        ? (result.target || state.firmwareUpdate.target).trim().toLowerCase()
+          === (state.target.target || '').trim().toLowerCase()
+        : null,
     };
   } catch (error) {
     state.firmwareUpdate = {...state.firmwareUpdate, status: 'error', error: String(error)};
   }
   render();
+}
+
+async function restoreDownloadedFirmware() {
+  if (!isTauriApp() || state.firmwareUpdate.path) return;
+  try {
+    const result = await tauriInvoke('get_downloaded_firmware');
+    if (!result) return;
+    state.firmwareUpdate = {
+      ...state.firmwareUpdate,
+      status: 'downloaded',
+      latestVersion: result.version || '',
+      productName: result.productName || '',
+      target: result.target || '',
+      filename: result.filename || '',
+      downloaded: result.size || 0,
+      total: result.size || 0,
+      path: result.path || '',
+      compatible: null,
+      error: '',
+    };
+    render();
+  } catch {
+    // A missing/stale in-memory download must not prevent device connection.
+  }
 }
 
 async function tauriInvoke(command, args = {}) {
@@ -2679,7 +2724,7 @@ function renderUpdate() {
         <div class="actions">
           <button class="secondary" type="button" data-action="firmware-update-check" ${['checking', 'downloading'].includes(firmwareUpdate.status) ? 'disabled' : ''}>${t('action.checkFirmwareUpdate')}</button>
           ${['available', 'availableUnconnected'].includes(firmwareUpdate.status) ? `<button class="primary" type="button" data-action="firmware-update-download">${t('action.downloadLatestFirmware')}</button>` : ''}
-          ${firmwareUpdate.status === 'downloaded' && state.target ? `<button class="primary" type="button" data-action="firmware-update-flash">${t('action.flashDownloadedFirmware')}</button>` : ''}
+          ${firmwareUpdate.status === 'downloaded' && state.target && firmwareUpdate.compatible !== false ? `<button class="primary" type="button" data-action="firmware-update-flash">${t('action.flashDownloadedFirmware')}</button>` : ''}
         </div>
         <hr>
         ${uploadError}
@@ -3270,5 +3315,9 @@ window.addEventListener('beforeunload', (event) => {
   event.returnValue = '';
 });
 render();
-runBusy(loadDevice, t('message.connected'));
-if (isTauriApp()) checkAppUpdate();
+async function initializeApp() {
+  await restoreDownloadedFirmware();
+  await runBusy(loadDevice, t('message.connected'));
+  if (isTauriApp()) checkAppUpdate();
+}
+initializeApp();
