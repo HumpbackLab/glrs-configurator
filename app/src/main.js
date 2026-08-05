@@ -258,6 +258,21 @@ async function apiFetch(path, options = {}) {
   return body;
 }
 
+async function apiFetchBlob(path, timeout = 30000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeout);
+  const response = await fetch(apiUrl(path), {signal: controller.signal}).catch((error) => {
+    if (error.name === 'AbortError') throw new Error(t('error.timeout', {host: state.apiBase}));
+    throw error;
+  }).finally(() => {
+    window.clearTimeout(timer);
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${await response.text()}`);
+  }
+  return response.blob();
+}
+
 function xhrRequest(path, options = {}) {
   const {
     method = 'GET',
@@ -1258,6 +1273,20 @@ async function checkFirmwareUpdate() {
 async function downloadFirmwareUpdate() {
   if (!['available', 'availableUnconnected'].includes(state.firmwareUpdate.status)) return;
 
+  let destinationPath;
+  try {
+    const {save} = await import('@tauri-apps/plugin-dialog');
+    destinationPath = await save({
+      defaultPath: state.firmwareUpdate.filename || 'firmware.bin',
+      filters: [{name: t('status.firmware'), extensions: ['bin']}],
+    });
+  } catch (error) {
+    state.firmwareUpdate = {...state.firmwareUpdate, status: 'error', error: String(error)};
+    render();
+    return;
+  }
+  if (!destinationPath) return;
+
   state.firmwareUpdate = {...state.firmwareUpdate, status: 'downloading', downloaded: 0, error: '', path: ''};
   render();
   try {
@@ -1271,7 +1300,16 @@ async function downloadFirmwareUpdate() {
       state.firmwareUpdate = {...state.firmwareUpdate, downloaded, total};
       render();
     };
-    const result = await invoke('download_firmware_update', {onEvent});
+    const result = await invoke('download_firmware_update', {destinationPath, onEvent});
+    if (destinationPath.startsWith('content://')) {
+      const [{writeFile}, bytes] = await Promise.all([
+        import('@tauri-apps/plugin-fs'),
+        invoke('load_downloaded_firmware'),
+      ]);
+      await writeFile(destinationPath, new Uint8Array(bytes));
+      result.path = destinationPath;
+      result.filename = state.firmwareUpdate.filename || result.filename;
+    }
     state.firmwareUpdate = {
       ...state.firmwareUpdate,
       status: 'downloaded',
@@ -1291,6 +1329,16 @@ async function downloadFirmwareUpdate() {
     state.firmwareUpdate = {...state.firmwareUpdate, status: 'error', error: String(error)};
   }
   render();
+}
+
+async function downloadCurrentFirmware() {
+  try {
+    const blob = await apiFetchBlob('/firmware.bin');
+    const path = await saveBlob(blob, 'firmware.bin', [{name: t('status.firmware'), extensions: ['bin']}]);
+    if (path) setMessage('ok', t('message.fileSaved', {path}));
+  } catch (error) {
+    setMessage('error', t('error.saveFile', {error: String(error)}));
+  }
 }
 
 async function restoreDownloadedFirmware() {
@@ -1552,18 +1600,58 @@ function profileCanExport() {
     || Array.isArray(flightConfigValue('fc_rate_pid', undefined));
 }
 
-function exportProfile() {
+async function saveBlob(blob, fileName, filters = []) {
+  if (isTauriApp()) {
+    const [{save}, {writeFile}] = await Promise.all([
+      import('@tauri-apps/plugin-dialog'),
+      import('@tauri-apps/plugin-fs'),
+    ]);
+    const path = await save({defaultPath: fileName, filters});
+    if (!path) return null;
+    await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
+    return path;
+  }
+
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      const pickerOptions = {suggestedName: fileName};
+      if (filters.length) {
+        pickerOptions.types = filters.map((filter) => ({
+          description: filter.name,
+          accept: {[blob.type || 'application/octet-stream']: filter.extensions.map((extension) => `.${extension}`)},
+        }));
+      }
+      const handle = await window.showSaveFilePicker(pickerOptions);
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return handle.name;
+    } catch (error) {
+      if (error?.name === 'AbortError') return null;
+      throw error;
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+  return fileName;
+}
+
+async function exportProfile() {
   const profile = buildProfile();
   const product = profile.compatibility.productName || profile.compatibility.target || 'receiver';
   const safeName = product.replace(/[^a-z0-9._-]+/gi, '-').replace(/^-|-$/g, '') || 'receiver';
   const blob = new Blob([JSON.stringify(profile, null, 2)], {type: 'application/json'});
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `${safeName}-profile.json`;
-  link.click();
-  URL.revokeObjectURL(url);
-  setMessage('ok', t('message.profileExported'));
+  try {
+    const path = await saveBlob(blob, `${safeName}-profile.json`, [{name: 'JSON', extensions: ['json']}]);
+    if (path) setMessage('ok', t('message.profileExported'));
+  } catch (error) {
+    setMessage('error', t('error.saveFile', {error: String(error)}));
+  }
 }
 
 function requireProfileNumber(value, label, min, max, integer = false) {
@@ -1916,14 +2004,9 @@ async function fetchCommunityProfile(item) {
   }
 }
 
-function downloadJson(value, fileName) {
+async function downloadJson(value, fileName) {
   const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], {type: 'application/json'});
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = fileName;
-  link.click();
-  URL.revokeObjectURL(url);
+  return saveBlob(blob, fileName, [{name: 'JSON', extensions: ['json']}]);
 }
 
 async function handleCommunityProfileAction(action, id) {
@@ -1937,7 +2020,12 @@ async function handleCommunityProfileAction(action, id) {
     const profile = await fetchCommunityProfile(item);
     if (action === 'download') {
       const safeName = (item.slug || item.id).replace(/[^a-z0-9._-]+/gi, '-') || 'community-profile';
-      downloadJson(profile, `${safeName}-profile.json`);
+      const path = await downloadJson(profile, `${safeName}-profile.json`);
+      if (!path) {
+        state.communityCatalog.busyId = '';
+        render();
+        return;
+      }
       state.communityCatalog.busyId = '';
       state.message = {type: 'ok', text: t('message.communityProfileDownloaded', {title: item.title})};
       render();
@@ -2663,7 +2751,6 @@ function renderWifi() {
 }
 
 function renderUpdate() {
-  const firmwareHref = apiUrl('/firmware.bin');
   const mismatch = state.uploadResult?.status === 'mismatch';
   const uploadProgress = state.uploadProgress;
   const uploadError = state.uploadResult && state.uploadResult.status !== 'ok'
@@ -2731,7 +2818,7 @@ function renderUpdate() {
         <form id="update-form">
           <div class="row"><label for="firmware">${t('update.firmwareFile')}</label><input id="firmware" name="firmware" type="file"></div>
           ${uploadProgress ? `<div class="upload-progress"><div class="upload-progress-meta"><span>${escapeHtml(uploadProgress.phase)}</span><strong>${progressPercent}%</strong></div><div class="upload-progress-bar"><span style="width:${progressPercent}%"></span></div></div>` : ''}
-          <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.upload')}</button><a class="secondary button-link" href="${firmwareHref}">${t('action.download')}</a>${mismatch ? `<button class="danger" type="button" data-action="force-confirm">${t('action.flashAnyway')}</button><button class="secondary" type="button" data-action="force-cancel">${t('action.cancel')}</button>` : ''}</div>
+          <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.upload')}</button><button class="secondary" type="button" data-action="firmware-current-download">${t('action.download')}</button>${mismatch ? `<button class="danger" type="button" data-action="force-confirm">${t('action.flashAnyway')}</button><button class="secondary" type="button" data-action="force-cancel">${t('action.cancel')}</button>` : ''}</div>
         </form>
       </section>
     </div>`;
@@ -3195,6 +3282,7 @@ function wireEvents() {
       if (action === 'app-update-install') installAppUpdate();
       if (action === 'firmware-update-check') checkFirmwareUpdate();
       if (action === 'firmware-update-download') downloadFirmwareUpdate();
+      if (action === 'firmware-current-download') downloadCurrentFirmware();
       if (action === 'firmware-update-flash') flashDownloadedFirmware();
       if (action === 'profile-export') exportProfile();
       if (action === 'profile-import') document.querySelector('#profile-file')?.click();

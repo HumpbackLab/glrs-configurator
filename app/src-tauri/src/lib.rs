@@ -565,29 +565,6 @@ mod firmware_updates {
         Ok(filename)
     }
 
-    fn available_path(download_dir: &Path, filename: &str) -> PathBuf {
-        let requested = download_dir.join(filename);
-        if !requested.exists() {
-            return requested;
-        }
-        let path = Path::new(filename);
-        let stem = path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("firmware");
-        let extension = path
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("bin");
-        for suffix in 1..1000 {
-            let candidate = download_dir.join(format!("{stem} ({suffix}).{extension}"));
-            if !candidate.exists() {
-                return candidate;
-            }
-        }
-        download_dir.join(format!("{stem}-download.{extension}"))
-    }
-
     fn downloaded_firmware_state_path(app: &AppHandle) -> Result<PathBuf, String> {
         let app_data_dir = app
             .path()
@@ -785,6 +762,7 @@ mod firmware_updates {
         app: AppHandle,
         pending: State<'_, PendingFirmwareUpdate>,
         downloaded_firmware: State<'_, DownloadedFirmwareUpdate>,
+        destination_path: String,
         on_event: Channel<DownloadEvent>,
     ) -> Result<DownloadedFirmware, String> {
         let pending = pending
@@ -812,11 +790,23 @@ mod firmware_updates {
             return Err("firmware download is too large".into());
         }
 
-        let download_dir = app
-            .path()
-            .download_dir()
-            .map_err(|error| error.to_string())?;
-        let destination = available_path(&download_dir, safe_filename(&pending.entry.filename)?);
+        safe_filename(&pending.entry.filename)?;
+        let destination = if destination_path.starts_with("content://") {
+            let cache_dir = app
+                .path()
+                .app_cache_dir()
+                .map_err(|error| error.to_string())?;
+            fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
+            cache_dir.join(format!(
+                "downloaded-{}",
+                safe_filename(&pending.entry.filename)?
+            ))
+        } else {
+            PathBuf::from(destination_path)
+        };
+        if destination.file_name().is_none() {
+            return Err("invalid firmware destination".into());
+        }
         let temporary = destination.with_extension("bin.part");
         let mut file = File::create(&temporary).map_err(|error| error.to_string())?;
         let mut hasher = Sha256::new();
@@ -844,6 +834,9 @@ mod firmware_updates {
         {
             let _ = fs::remove_file(&temporary);
             return Err("downloaded firmware failed size or SHA-256 verification".into());
+        }
+        if destination.exists() {
+            fs::remove_file(&destination).map_err(|error| error.to_string())?;
         }
         fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
         let _ = on_event.send(DownloadEvent::Finished);
@@ -932,6 +925,8 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             app.manage(firmware_updates::PendingFirmwareUpdate::new());
             app.manage(firmware_updates::DownloadedFirmwareUpdate::new());
