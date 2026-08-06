@@ -90,6 +90,8 @@ const state = {
     query: '',
     vehicleType: '',
     busyId: '',
+    usageProfileId: '',
+    usageById: {},
     error: '',
   },
 };
@@ -1855,6 +1857,31 @@ function communityProfileSummary(profile) {
   };
 }
 
+function communityUsageInstructions(profile) {
+  const flight = profile?.flight;
+  if (!flight) return [];
+
+  const mixerOutputCount = Array.isArray(flight.mixer) ? Math.floor(flight.mixer.length / 4) : 0;
+  const mixerServos = Array.isArray(flight.mixerServos) ? flight.mixerServos : [];
+  const outputs = Array.from({length: mixerOutputCount}, (_, index) => t(
+    mixerServos[index] ? 'community.catalog.usageServo' : 'community.catalog.usageMotor',
+    {output: index + 1},
+  ));
+
+  const switches = [];
+  if (flight.arm?.enabled && Number.isInteger(Number(flight.arm.channel))) {
+    switches.push(t('community.catalog.usageArm', {channel: flight.arm.channel}));
+  }
+  for (const mode of ['rate', 'angle']) {
+    const channel = flight.modeConditions?.[mode]?.[0];
+    if (Number.isInteger(Number(channel))) {
+      switches.push(t('community.catalog.usageSwitch', {channel, mode: mode.toUpperCase()}));
+    }
+  }
+
+  return [...outputs, ...switches];
+}
+
 function validateCommunityProfile(profile) {
   if (!profile || profile.format !== PROFILE_FORMAT) throw new Error(t('error.profileFormat'));
   if (profile.version !== PROFILE_VERSION) throw new Error(t('error.profileVersion', {version: profile.version}));
@@ -1942,6 +1969,8 @@ function renderCommunityProfileCards() {
   return profiles.map((item) => {
     const busy = state.communityCatalog.busyId === item.id;
     const compatible = Boolean(currentTarget && item.target && currentTarget === item.target);
+    const usageOpen = state.communityCatalog.usageProfileId === item.id;
+    const usage = communityUsageInstructions(state.communityCatalog.usageById[item.id]);
     return `<article class="community-profile-card">
       <div class="community-profile-heading">
         <div><h3>${escapeHtml(item.title)}</h3><span>${escapeHtml(item.authorName || t('value.unknown'))}</span></div>
@@ -1953,7 +1982,12 @@ function renderCommunityProfileCards() {
         <span>${t('community.catalog.motors')}: <strong>${escapeHtml(item.profileSummary?.motorCount ?? 0)}</strong></span>
       </div>
       ${(item.tags || []).length ? `<div class="community-tags">${item.tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
+      ${usageOpen ? `<div class="community-usage">
+        <strong>${t('community.catalog.usageHeading')}</strong>
+        ${usage.length ? `<ul>${usage.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>` : `<div class="helper">${t('community.catalog.usageEmpty')}</div>`}
+      </div>` : ''}
       <div class="actions community-profile-actions">
+        <button class="secondary" type="button" data-community-action="usage" data-profile-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}>${busy ? t('community.catalog.loadingProfile') : t(usageOpen ? 'community.catalog.hideUsage' : 'community.catalog.showUsage')}</button>
         <button class="secondary" type="button" data-community-action="download" data-profile-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}>${t('action.downloadCommunityProfile')}</button>
         <button class="primary" type="button" data-community-action="import" data-profile-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}>${busy ? t('community.catalog.loadingProfile') : t('action.importCommunityProfile')}</button>
       </div>
@@ -2013,11 +2047,28 @@ async function handleCommunityProfileAction(action, id) {
   const item = state.communityCatalog.profiles.find((profile) => profile.id === id);
   if (!item || state.communityCatalog.busyId) return;
   if (action === 'import' && state.profileDraft && !window.confirm(t('community.catalog.replaceDraftConfirm'))) return;
+  if (action === 'usage' && state.communityCatalog.usageProfileId === id) {
+    state.communityCatalog.usageProfileId = '';
+    render();
+    return;
+  }
+  if (action === 'usage' && Object.hasOwn(state.communityCatalog.usageById, id)) {
+    state.communityCatalog.usageProfileId = id;
+    render();
+    return;
+  }
   state.communityCatalog.busyId = id;
   state.communityCatalog.error = '';
   render();
   try {
     const profile = await fetchCommunityProfile(item);
+    if (action === 'usage') {
+      state.communityCatalog.usageById[id] = profile;
+      state.communityCatalog.usageProfileId = id;
+      state.communityCatalog.busyId = '';
+      render();
+      return;
+    }
     if (action === 'download') {
       const safeName = (item.slug || item.id).replace(/[^a-z0-9._-]+/gi, '-') || 'community-profile';
       const path = await downloadJson(profile, `${safeName}-profile.json`);

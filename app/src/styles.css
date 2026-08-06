@@ -530,6 +530,25 @@ button:disabled {
   padding: 3px 7px;
 }
 
+.community-usage {
+  background: #f5f7fa;
+  border-left: 3px solid #2f80c4;
+  border-radius: 6px;
+  color: #344054;
+  font-size: 13px;
+  margin-top: 12px;
+  padding: 10px 12px;
+}
+
+.community-usage ul {
+  margin: 7px 0 0;
+  padding-left: 20px;
+}
+
+.community-usage li + li {
+  margin-top: 3px;
+}
+
 .community-profile-actions {
   margin-top: auto;
   padding-top: 14px;

@@ -102,7 +102,7 @@
     "pendingReview": "Submission created and awaiting community review:",
     "catalog": {
       "heading": "Community Profiles",
-      "description": "Browse approved profiles. Download saves a reusable Profile JSON; direct import only fills the current forms and never writes to the receiver.",
+      "description": "Browse approved profiles and preview automatically generated mixer and switch instructions before importing. Download saves a reusable Profile JSON; direct import only fills the current forms and never writes to the receiver.",
       "loading": "Loading the community profile catalog…",
       "loadingProfile": "Loading…",
       "retry": "Retry",
@@ -116,6 +116,14 @@
       "target": "Target",
       "pwm": "PWM",
       "motors": "Motors",
+      "showUsage": "View usage",
+      "hideUsage": "Hide usage",
+      "usageHeading": "Usage instructions",
+      "usageServo": "M{output} servo",
+      "usageMotor": "M{output} motor",
+      "usageArm": "CH{channel} is ARM",
+      "usageSwitch": "CH{channel} is {mode}",
+      "usageEmpty": "This profile has no mixer or mode-switch instructions.",
       "replaceDraftConfirm": "There are imported values that have not been saved. Continue and replace those form drafts with this community profile?"
     }
   },

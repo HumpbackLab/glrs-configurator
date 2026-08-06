@@ -102,7 +102,7 @@
     "pendingReview": "投稿已创建，等待社区审核：",
     "catalog": {
       "heading": "社区配置",
-      "description": "浏览已经审核通过的配置。下载会保存为本地 Profile JSON；直接导入只填充当前表单，不会写入接收机。",
+      "description": "浏览已经审核通过的配置，可先查看自动生成的混控和开关使用说明。下载会保存为本地 Profile JSON；直接导入只填充当前表单，不会写入接收机。",
       "loading": "正在获取社区配置目录…",
       "loadingProfile": "正在获取…",
       "retry": "重试",
@@ -116,6 +116,14 @@
       "target": "目标",
       "pwm": "PWM",
       "motors": "电机",
+      "showUsage": "查看使用说明",
+      "hideUsage": "收起说明",
+      "usageHeading": "使用说明",
+      "usageServo": "M{output} 舵机",
+      "usageMotor": "M{output} 电机",
+      "usageArm": "CH{channel} 是解锁",
+      "usageSwitch": "CH{channel} 是 {mode}",
+      "usageEmpty": "此配置没有混控器或模式开关说明。",
       "replaceDraftConfirm": "当前有尚未保存的导入内容。继续将用社区配置覆盖这些表单草稿，是否继续？"
     }
   },
