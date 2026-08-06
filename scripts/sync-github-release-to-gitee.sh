@@ -35,6 +35,7 @@
 #   GITEE_TARGET_COMMITISH    Override the destination branch or commit.
 #   GITEE_MANIFEST_BRANCH     Publish latest.json to this Gitee branch; default: master.
 #   GITEE_MANIFEST_PATH       Manifest path; default: updater/latest.json.
+#   GITEE_ANDROID_MANIFEST_PATH Android manifest path; default: updater/android-latest.json.
 #   REWRITE_LATEST_JSON       Rewrite download URLs to Gitee; default: 1.
 #   GITEE_MAX_ASSET_BYTES     Per-file limit; default: 50000000 (Gitee community limit).
 #   REQUIRED_ASSET_SUFFIXES   Comma-separated suffixes that must exist, e.g. .apk.
@@ -71,6 +72,7 @@ Environment:
   GITEE_TARGET_COMMITISH      Branch/commit used when Gitee needs to create the tag.
   GITEE_MANIFEST_BRANCH       Also publish latest.json to this Gitee branch (default: master).
   GITEE_MANIFEST_PATH         Stable manifest path (default: updater/latest.json).
+  GITEE_ANDROID_MANIFEST_PATH Stable Android manifest path (default: updater/android-latest.json).
   GITEE_MAX_ASSET_BYTES       Per-file limit (default: 50000000, Gitee community limit).
   REQUIRED_ASSET_SUFFIXES     Comma-separated GitHub asset suffixes that must exist.
   SKIP_EXISTING_ASSETS        Skip same-name, same-size non-manifest files (default: 0).
@@ -110,6 +112,7 @@ requested_tag=${3:-latest}
 rewrite_latest=${REWRITE_LATEST_JSON:-1}
 manifest_branch=${GITEE_MANIFEST_BRANCH:-master}
 manifest_path=${GITEE_MANIFEST_PATH:-updater/latest.json}
+android_manifest_path=${GITEE_ANDROID_MANIFEST_PATH:-updater/android-latest.json}
 max_asset_bytes=${GITEE_MAX_ASSET_BYTES:-50000000}
 skip_existing=${SKIP_EXISTING_ASSETS:-0}
 skip_oversize=${SKIP_OVERSIZE_ASSETS:-0}
@@ -120,6 +123,7 @@ required_asset_suffixes=${REQUIRED_ASSET_SUFFIXES:-}
 [[ $skip_oversize == 0 || $skip_oversize == 1 ]] || die "SKIP_OVERSIZE_ASSETS must be 0 or 1"
 [[ $max_asset_bytes =~ ^[0-9]+$ ]] || die "GITEE_MAX_ASSET_BYTES must be an integer"
 [[ $manifest_path =~ ^[A-Za-z0-9._/-]+$ ]] || die "GITEE_MANIFEST_PATH contains unsupported characters"
+[[ $android_manifest_path =~ ^[A-Za-z0-9._/-]+$ ]] || die "GITEE_ANDROID_MANIFEST_PATH contains unsupported characters"
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -220,6 +224,7 @@ curl --fail-with-body --silent --show-error --get \
   "$gitee_api/releases/$release_id/attach_files" > "$tmp_dir/gitee-assets.json"
 
 manifest_file=
+android_manifest_file=
 while IFS= read -r encoded_asset; do
   asset=$(printf '%s' "$encoded_asset" | base64 --decode)
   asset_name=$(jq -r '.name' <<< "$asset")
@@ -235,7 +240,7 @@ while IFS= read -r encoded_asset; do
   fi
 
   existing_size=$(jq -r --arg name "$asset_name" '.[] | select(.name == $name) | .size' "$tmp_dir/gitee-assets.json" | head -1)
-  if [[ $skip_existing == 1 && $asset_name != latest.json && $existing_size == "$asset_size" ]]; then
+  if [[ $skip_existing == 1 && $asset_name != latest.json && $asset_name != android-latest.json && $existing_size == "$asset_size" ]]; then
     echo "Skipping unchanged Gitee asset: $asset_name"
     continue
   fi
@@ -246,22 +251,37 @@ while IFS= read -r encoded_asset; do
     "${curl_retry[@]}" \
     "${github_headers[@]}" "$asset_url" --output "$local_file"
 
-  if [[ $asset_name == latest.json && $rewrite_latest == 1 ]]; then
-    gitee_download_base="https://gitee.com/$gitee_repo/releases/download/$encoded_tag"
-    asset_url_map=$(jq --arg base "$gitee_download_base" '
-      [.assets[] | {key: .url, value: ($base + "/" + (.name | @uri))}] | from_entries
-    ' "$tmp_dir/github-release.json")
-    jq --arg base "$gitee_download_base" --argjson asset_urls "$asset_url_map" '
-      .platforms |= with_entries(
-        .value.url as $source_url
-        | .value.url = (
-            $asset_urls[$source_url]
-            // ($source_url | sub("^https://github\\.com/[^/]+/[^/]+/releases/download/[^/]+"; $base))
-          )
-      )
-    ' "$local_file" > "$tmp_dir/latest.rewritten.json"
-    local_file="$tmp_dir/latest.rewritten.json"
+  if [[ $asset_name == latest.json ]]; then
     manifest_file=$local_file
+    if [[ $rewrite_latest == 1 ]]; then
+      gitee_download_base="https://gitee.com/$gitee_repo/releases/download/$encoded_tag"
+      asset_url_map=$(jq --arg base "$gitee_download_base" '
+        [.assets[] | {key: .url, value: ($base + "/" + (.name | @uri))}] | from_entries
+      ' "$tmp_dir/github-release.json")
+      jq --arg base "$gitee_download_base" --argjson asset_urls "$asset_url_map" '
+        .platforms |= with_entries(
+          .value.url as $source_url
+          | .value.url = (
+              $asset_urls[$source_url]
+              // ($source_url | sub("^https://github\\.com/[^/]+/[^/]+/releases/download/[^/]+"; $base))
+            )
+        )
+      ' "$local_file" > "$tmp_dir/latest.rewritten.json"
+      local_file="$tmp_dir/latest.rewritten.json"
+      manifest_file=$local_file
+    fi
+  fi
+
+  if [[ $asset_name == android-latest.json ]]; then
+    android_manifest_file=$local_file
+    if [[ $rewrite_latest == 1 ]]; then
+      gitee_download_base="https://gitee.com/$gitee_repo/releases/download/$encoded_tag"
+      jq --arg base "$gitee_download_base" '
+        .artifact.url |= sub("^https://github\\.com/[^/]+/[^/]+/releases/download/[^/]+"; $base)
+      ' "$local_file" > "$tmp_dir/android-latest.rewritten.json"
+      local_file="$tmp_dir/android-latest.rewritten.json"
+      android_manifest_file=$local_file
+    fi
   fi
 
   while IFS= read -r existing_id; do
@@ -318,6 +338,45 @@ if [[ -n $manifest_branch ]]; then
   esac
 
   echo "Stable updater manifest: https://raw.giteeusercontent.com/$gitee_repo/raw/$manifest_branch/$manifest_path"
+fi
+
+
+if [[ -n $manifest_branch ]]; then
+  [[ -n $android_manifest_file ]] || die "android-latest.json was not present in the GitHub release"
+  encoded_android_path=$(jq -rn --arg value "$android_manifest_path" '$value | @uri' | sed 's/%2F/\//g')
+  android_content_url="$gitee_api/contents/$encoded_android_path"
+  android_content_status=$(curl --silent --show-error --output "$tmp_dir/gitee-android-content.json" \
+    "${curl_retry[@]}" \
+    --write-out '%{http_code}' --get "${gitee_auth[@]}" \
+    --data-urlencode "ref=$manifest_branch" \
+    "$android_content_url")
+  android_manifest_base64=$(base64 < "$android_manifest_file" | tr -d '\n')
+  android_content_form=(
+    --data-urlencode "content=$android_manifest_base64"
+    --data-urlencode "message=Update mirrored Android manifest for $tag"
+    --data-urlencode "branch=$manifest_branch"
+  )
+
+  case $android_content_status in
+    200)
+      android_content_sha=$(jq -er '.sha' "$tmp_dir/gitee-android-content.json")
+      android_content_form+=(--data-urlencode "sha=$android_content_sha")
+      curl --fail-with-body --silent --show-error --request PUT \
+        "${curl_retry[@]}" \
+        "${gitee_auth[@]}" "${android_content_form[@]}" "$android_content_url" >/dev/null
+      ;;
+    404)
+      curl --fail-with-body --silent --show-error --request POST \
+        "${curl_retry[@]}" \
+        "${gitee_auth[@]}" "${android_content_form[@]}" "$android_content_url" >/dev/null
+      ;;
+    *)
+      cat "$tmp_dir/gitee-android-content.json" >&2
+      die "Gitee Android manifest lookup returned HTTP $android_content_status"
+      ;;
+  esac
+
+  echo "Stable Android updater manifest: https://raw.giteeusercontent.com/$gitee_repo/raw/$manifest_branch/$android_manifest_path"
 fi
 
 echo "Release sync complete: https://gitee.com/$gitee_repo/releases/tag/$encoded_tag"

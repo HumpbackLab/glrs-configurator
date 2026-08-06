@@ -1455,10 +1455,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "gyro-android-updater"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "gyro-elrs-configurator"
 version = "0.1.5"
 dependencies = [
+ "gyro-android-updater",
  "reqwest 0.12.28",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

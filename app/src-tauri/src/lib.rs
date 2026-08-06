@@ -309,6 +309,292 @@ mod app_updates {
     }
 }
 
+#[cfg(target_os = "android")]
+mod android_app_updates {
+    use gyro_android_updater::{AndroidUpdaterExt, InstallResult};
+    use reqwest::{Client, Url};
+    use semver::Version;
+    use serde::{Deserialize, Serialize};
+    use sha2::{Digest, Sha256};
+    use std::fs::{self, File};
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use std::time::Duration;
+    use tauri::{ipc::Channel, AppHandle, Manager, State};
+
+    const GITHUB_ENDPOINT: &str =
+        "https://github.com/HumpbackLab/glrs-configurator/releases/latest/download/android-latest.json";
+    const GITEE_ENDPOINT: &str =
+        "https://raw.giteeusercontent.com/ncer/glrs-configurator/raw/master/updater/android-latest.json";
+    const GITHUB_DOWNLOAD_PREFIX: &str =
+        "https://github.com/HumpbackLab/glrs-configurator/releases/download/";
+    const GITEE_DOWNLOAD_PREFIX: &str =
+        "https://gitee.com/ncer/glrs-configurator/releases/download/";
+    const MAX_MANIFEST_SIZE: u64 = 1024 * 1024;
+    const MAX_APK_SIZE: u64 = 100 * 1024 * 1024;
+
+    #[derive(Deserialize)]
+    struct UpdateManifest {
+        schema: u32,
+        version: String,
+        #[serde(default)]
+        notes: Option<String>,
+        artifact: AndroidArtifact,
+    }
+
+    #[derive(Clone, Deserialize)]
+    struct AndroidArtifact {
+        arch: String,
+        url: String,
+        size: u64,
+        sha256: String,
+    }
+
+    #[derive(Clone)]
+    struct PendingAndroidUpdate {
+        version: String,
+        notes: Option<String>,
+        artifact: AndroidArtifact,
+        source: String,
+    }
+
+    pub struct PendingUpdate(Mutex<Option<PendingAndroidUpdate>>);
+    pub struct DownloadedUpdate(Mutex<Option<PathBuf>>);
+
+    impl PendingUpdate {
+        pub fn new() -> Self {
+            Self(Mutex::new(None))
+        }
+    }
+
+    impl DownloadedUpdate {
+        pub fn new() -> Self {
+            Self(Mutex::new(None))
+        }
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct UpdateMetadata {
+        version: String,
+        notes: Option<String>,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct UpdateCheckResult {
+        current_version: String,
+        update: Option<UpdateMetadata>,
+    }
+
+    #[derive(Clone, Serialize)]
+    #[serde(tag = "event", content = "data")]
+    pub enum DownloadEvent {
+        #[serde(rename_all = "camelCase")]
+        Started {
+            content_length: Option<u64>,
+        },
+        #[serde(rename_all = "camelCase")]
+        Progress {
+            chunk_length: usize,
+        },
+        Finished,
+    }
+
+    fn endpoint_for_source(source: &str) -> Result<&'static str, String> {
+        match source {
+            "gitee" => Ok(GITEE_ENDPOINT),
+            "github" => Ok(GITHUB_ENDPOINT),
+            _ => Err(format!("unknown update source: {source}")),
+        }
+    }
+
+    fn validated_download_url(artifact: &AndroidArtifact, source: &str) -> Result<Url, String> {
+        let url = Url::parse(&artifact.url).map_err(|error| error.to_string())?;
+        let prefix = match source {
+            "gitee" => GITEE_DOWNLOAD_PREFIX,
+            "github" => GITHUB_DOWNLOAD_PREFIX,
+            _ => return Err(format!("unknown update source: {source}")),
+        };
+        if !url.as_str().starts_with(prefix) {
+            return Err("Android update URL is not from the selected source".into());
+        }
+        Ok(url)
+    }
+
+    fn validate_artifact(artifact: &AndroidArtifact, source: &str) -> Result<(), String> {
+        if artifact.size == 0 || artifact.size > MAX_APK_SIZE {
+            return Err("Android update size is invalid".into());
+        }
+        if artifact.sha256.len() != 64
+            || !artifact.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err("Android update SHA-256 is invalid".into());
+        }
+        validated_download_url(artifact, source)?;
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub async fn check_app_update(
+        app: AppHandle,
+        source: String,
+        pending: State<'_, PendingUpdate>,
+        downloaded: State<'_, DownloadedUpdate>,
+    ) -> Result<UpdateCheckResult, String> {
+        let endpoint = endpoint_for_source(&source)?;
+        let response = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .build()
+            .map_err(|error| error.to_string())?
+            .get(endpoint)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?
+            .error_for_status()
+            .map_err(|error| error.to_string())?;
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_MANIFEST_SIZE)
+        {
+            return Err("update manifest is too large".into());
+        }
+        let bytes = response.bytes().await.map_err(|error| error.to_string())?;
+        if bytes.len() as u64 > MAX_MANIFEST_SIZE {
+            return Err("update manifest is too large".into());
+        }
+        let manifest: UpdateManifest =
+            serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+        if manifest.schema != 1 {
+            return Err(format!(
+                "unsupported Android update manifest schema {}",
+                manifest.schema
+            ));
+        }
+        let latest = Version::parse(manifest.version.trim_start_matches('v'))
+            .map_err(|error| format!("invalid update version: {error}"))?;
+        let current = app.package_info().version.clone();
+
+        let update = if latest > current {
+            let artifact = manifest.artifact;
+            if artifact.arch != "aarch64" {
+                return Err("Android update architecture is not supported".into());
+            }
+            validate_artifact(&artifact, &source)?;
+            Some(PendingAndroidUpdate {
+                version: manifest.version.clone(),
+                notes: manifest.notes.clone(),
+                artifact,
+                source,
+            })
+        } else {
+            None
+        };
+        let metadata = update.as_ref().map(|update| UpdateMetadata {
+            version: update.version.clone(),
+            notes: update.notes.clone(),
+        });
+        *pending.0.lock().map_err(|_| "update state poisoned")? = update;
+        *downloaded.0.lock().map_err(|_| "update state poisoned")? = None;
+
+        Ok(UpdateCheckResult {
+            current_version: current.to_string(),
+            update: metadata,
+        })
+    }
+
+    #[tauri::command]
+    pub async fn install_app_update(
+        app: AppHandle,
+        pending: State<'_, PendingUpdate>,
+        downloaded: State<'_, DownloadedUpdate>,
+        on_event: Channel<DownloadEvent>,
+    ) -> Result<InstallResult, String> {
+        let cached = downloaded
+            .0
+            .lock()
+            .map_err(|_| "update state poisoned")?
+            .clone()
+            .filter(|path| path.is_file());
+        let apk_path = if let Some(path) = cached {
+            path
+        } else {
+            let update = pending
+                .0
+                .lock()
+                .map_err(|_| "update state poisoned")?
+                .clone()
+                .ok_or_else(|| "no pending Android update".to_string())?;
+            let url = validated_download_url(&update.artifact, &update.source)?;
+            let mut response = Client::builder()
+                .timeout(Duration::from_secs(180))
+                .redirect(reqwest::redirect::Policy::limited(5))
+                .build()
+                .map_err(|error| error.to_string())?
+                .get(url)
+                .send()
+                .await
+                .map_err(|error| error.to_string())?
+                .error_for_status()
+                .map_err(|error| error.to_string())?;
+            if response
+                .content_length()
+                .is_some_and(|length| length > MAX_APK_SIZE)
+            {
+                return Err("Android update is too large".into());
+            }
+
+            let cache_dir = app
+                .path()
+                .app_cache_dir()
+                .map_err(|error| error.to_string())?;
+            fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
+            let destination = cache_dir.join("gyro-elrs-configurator-update.apk");
+            let temporary = cache_dir.join("gyro-elrs-configurator-update.apk.part");
+            let mut file = File::create(&temporary).map_err(|error| error.to_string())?;
+            let mut hasher = Sha256::new();
+            let mut downloaded_bytes = 0u64;
+            let _ = on_event.send(DownloadEvent::Started {
+                content_length: response.content_length(),
+            });
+            while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+                downloaded_bytes += chunk.len() as u64;
+                if downloaded_bytes > MAX_APK_SIZE {
+                    let _ = fs::remove_file(&temporary);
+                    return Err("Android update is too large".into());
+                }
+                file.write_all(&chunk).map_err(|error| error.to_string())?;
+                hasher.update(&chunk);
+                let _ = on_event.send(DownloadEvent::Progress {
+                    chunk_length: chunk.len(),
+                });
+            }
+            drop(file);
+
+            let actual_sha256 = format!("{:x}", hasher.finalize());
+            if downloaded_bytes != update.artifact.size
+                || actual_sha256 != update.artifact.sha256.to_ascii_lowercase()
+            {
+                let _ = fs::remove_file(&temporary);
+                return Err("Android update failed size or SHA-256 verification".into());
+            }
+            if destination.exists() {
+                fs::remove_file(&destination).map_err(|error| error.to_string())?;
+            }
+            fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
+            let _ = on_event.send(DownloadEvent::Finished);
+            *downloaded.0.lock().map_err(|_| "update state poisoned")? = Some(destination.clone());
+            destination
+        };
+
+        app.android_updater()
+            .install(&apk_path.to_string_lossy())
+            .map_err(|error| error.to_string())
+    }
+}
+
 mod firmware_updates {
     use reqwest::{Client, Url};
     use serde::{Deserialize, Serialize};
@@ -919,17 +1205,26 @@ mod firmware_updates {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(MspDebugState {
             stream: Mutex::new(None),
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_fs::init());
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(gyro_android_updater::init());
+
+    builder
         .setup(|app| {
             app.manage(firmware_updates::PendingFirmwareUpdate::new());
             app.manage(firmware_updates::DownloadedFirmwareUpdate::new());
+            #[cfg(target_os = "android")]
+            {
+                app.manage(android_app_updates::PendingUpdate::new());
+                app.manage(android_app_updates::DownloadedUpdate::new());
+            }
             #[cfg(desktop)]
             {
                 app.manage(app_updates::PendingUpdate(Mutex::new(None)));
@@ -946,6 +1241,10 @@ pub fn run() {
             app_updates::check_app_update,
             #[cfg(desktop)]
             app_updates::install_app_update,
+            #[cfg(target_os = "android")]
+            android_app_updates::check_app_update,
+            #[cfg(target_os = "android")]
+            android_app_updates::install_app_update,
             firmware_updates::check_firmware_update,
             firmware_updates::download_firmware_update,
             firmware_updates::load_downloaded_firmware,

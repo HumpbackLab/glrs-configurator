@@ -23,9 +23,11 @@
 `glrs-configurator/.github/workflows/release.yml` 在 GitHub Release 发布时执行：
 
 1. 检出 Release 标签。
-2. 构建 Windows NSIS 和 Linux DEB 安装包。
-3. 使用 Tauri updater 私钥签名更新包。
+2. 构建 Windows NSIS、Linux DEB 和签名的 Android APK。
+3. 使用 Tauri updater 私钥签名桌面更新包。
 4. 将安装包、签名和 `latest.json` 上传到 GitHub Release。
+5. 为 APK 计算大小和 SHA-256，生成 `android-latest.json`。
+6. 将两个 manifest 和发布附件同步到 Gitee，并发布稳定的 raw manifest 地址。
 
 Release 标签必须使用应用构建流程支持的版本格式，例如：
 
@@ -40,7 +42,7 @@ TAURI_SIGNING_PRIVATE_KEY
 TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 ```
 
-### 2.2 检查与安装
+### 2.2 桌面端检查与安装
 
 桌面端通过 Tauri updater 完成应用更新：
 
@@ -51,7 +53,44 @@ TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 
 当前检查地址定义在 `app/src-tauri/src/lib.rs` 的 `app_updates` 模块中。
 
-应用自动更新仅在桌面 Tauri 环境可用，浏览器开发模式不支持。
+浏览器开发模式不支持应用自动更新。
+
+### 2.3 Android 检查与安装
+
+Tauri 官方 updater 不支持 Android，因此 Android 使用项目内的更新实现：
+
+1. 根据 GitHub/Gitee 更新源读取 `android-latest.json`。
+2. 使用语义版本比较当前版本和发布版本。
+3. 下载 `aarch64` APK 到应用缓存，限制最大 100 MiB。
+4. 校验 manifest 声明的文件大小和 SHA-256。
+5. Android 8 及以上若尚未授权“安装未知应用”，先打开对应系统设置页。
+6. 通过应用专属 `FileProvider` 打开系统安装器，由用户确认覆盖安装。
+
+系统安装器还会校验 APK 的包名和签名证书；发布 APK 必须继续使用同一个 Android keystore，
+且新版本的 `versionCode` 必须大于已安装版本。Android 不允许普通应用静默完成最后的安装确认。
+
+Android manifest 地址：
+
+```text
+https://github.com/HumpbackLab/glrs-configurator/releases/latest/download/android-latest.json
+https://raw.giteeusercontent.com/ncer/glrs-configurator/raw/master/updater/android-latest.json
+```
+
+格式如下：
+
+```json
+{
+  "schema": 1,
+  "version": "0.2.0",
+  "notes": "Release notes",
+  "artifact": {
+    "arch": "aarch64",
+    "url": "发布 APK 地址",
+    "size": 12345678,
+    "sha256": "APK 的 SHA-256"
+  }
+}
+```
 
 ## 3. LightFin Nano 固件发布
 

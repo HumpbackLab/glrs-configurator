@@ -1210,7 +1210,7 @@ async function checkAppUpdate() {
 }
 
 async function installAppUpdate() {
-  if (state.appUpdate.status !== 'available') return;
+  if (!['available', 'permission'].includes(state.appUpdate.status)) return;
 
   state.appUpdate = {...state.appUpdate, status: 'downloading', downloaded: 0, total: 0, error: ''};
   render();
@@ -1225,7 +1225,17 @@ async function installAppUpdate() {
       state.appUpdate = {...state.appUpdate, downloaded, total};
       render();
     };
-    await invoke('install_app_update', {onEvent});
+    const result = await invoke('install_app_update', {onEvent});
+    if (result?.permissionRequired) {
+      state.appUpdate = {...state.appUpdate, status: 'permission', downloaded, total};
+      render();
+      return;
+    }
+    if (result?.installerLaunched) {
+      state.appUpdate = {...state.appUpdate, status: 'installing', downloaded, total};
+      render();
+      return;
+    }
     state.appUpdate = {...state.appUpdate, status: 'installed', downloaded, total};
     render();
     const {relaunch} = await import('@tauri-apps/plugin-process');
@@ -2828,7 +2838,7 @@ function renderUpdate() {
         <p class="helper">${t('appUpdate.description')}</p>
         <div class="row">
           <label for="app-update-source">${t('appUpdate.source')}</label>
-          <select id="app-update-source" ${['checking', 'downloading', 'installed'].includes(appUpdate.status) ? 'disabled' : ''}>
+          <select id="app-update-source" ${['checking', 'downloading', 'permission', 'installing', 'installed'].includes(appUpdate.status) ? 'disabled' : ''}>
             <option value="gitee" ${state.updateSource === 'gitee' ? 'selected' : ''}>${t('appUpdate.sourceGitee')}</option>
             <option value="github" ${state.updateSource === 'github' ? 'selected' : ''}>${t('appUpdate.sourceGithub')}</option>
           </select>
@@ -2838,8 +2848,8 @@ function renderUpdate() {
         ${appUpdate.notes ? `<div class="app-update-notes">${escapeHtml(appUpdate.notes)}</div>` : ''}
         ${appUpdate.status === 'downloading' ? `<div class="upload-progress"><div class="upload-progress-meta"><span>${t('appUpdate.downloading')}</span><strong>${appProgressPercent}%</strong></div><div class="upload-progress-bar"><span style="width:${appProgressPercent}%"></span></div></div>` : ''}
         <div class="actions">
-          <button class="secondary" type="button" data-action="app-update-check" ${['checking', 'downloading', 'installed'].includes(appUpdate.status) ? 'disabled' : ''}>${t('action.checkUpdate')}</button>
-          ${appUpdate.status === 'available' ? `<button class="primary" type="button" data-action="app-update-install">${t('action.installUpdate')}</button>` : ''}
+          <button class="secondary" type="button" data-action="app-update-check" ${['checking', 'downloading', 'permission', 'installing', 'installed'].includes(appUpdate.status) ? 'disabled' : ''}>${t('action.checkUpdate')}</button>
+          ${['available', 'permission'].includes(appUpdate.status) ? `<button class="primary" type="button" data-action="app-update-install">${t(appUpdate.status === 'permission' ? 'action.continueInstall' : 'action.installUpdate')}</button>` : ''}
         </div>
       </section>
       <section class="panel">

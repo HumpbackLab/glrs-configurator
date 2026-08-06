@@ -37,6 +37,7 @@
     "stop": "Stop",
     "checkUpdate": "Check for App Updates",
     "installUpdate": "Download and Install",
+    "continueInstall": "Continue Installation",
     "checkFirmwareUpdate": "Check for Firmware Updates",
     "downloadLatestFirmware": "Download Latest Firmware",
     "flashDownloadedFirmware": "Flash Downloaded Firmware",
@@ -276,7 +277,7 @@
   },
   "appUpdate": {
     "heading": "Configurator Update",
-    "description": "Check for and install a new Gyro ELRS Configurator version. The app closes during installation and relaunches when finished.",
+    "description": "Check for and install a new Gyro ELRS Configurator version. Desktop updates install automatically; Android opens the system installer for confirmation.",
     "source": "Update source",
     "sourceGitee": "Gitee (China mirror)",
     "sourceGithub": "GitHub",
@@ -287,6 +288,8 @@
       "current": "You are running the latest version ({current})",
       "available": "Version {version} is available; current version is {current}",
       "downloading": "Downloading version {version}",
+      "permission": "Allow this app to install unknown apps in system settings, then return and select Continue Installation",
+      "installing": "The system installer is open; confirm installation of the new version",
       "installed": "Update installed; relaunching…",
       "error": "Could not check for or install the update",
       "unsupported": "Automatic app updates are unavailable in browser development mode"

@@ -174,9 +174,58 @@ jobs:
           releaseAssetNamePattern: gyro-elrs-configurator_[version]_[arch].[ext]
           args: --target aarch64 --apk --split-per-abi --ci
 
+  android-manifest:
+    name: Publish Android update manifest
+    needs: [build, android]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Build and upload Android update manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/android-update"
+          gh release download "$TAG" \
+            --repo "$REPOSITORY" \
+            --pattern '*aarch64.apk' \
+            --dir "$RUNNER_TEMP/android-update"
+          APK_PATH="$(find "$RUNNER_TEMP/android-update" -maxdepth 1 -type f -name '*aarch64.apk' -print -quit)"
+          test -n "$APK_PATH"
+          APK_NAME="$(basename "$APK_PATH")"
+          APK_SIZE="$(stat -c '%s' "$APK_PATH")"
+          APK_SHA256="$(sha256sum "$APK_PATH" | cut -d ' ' -f 1)"
+          APK_URL="$(gh api "repos/$REPOSITORY/releases/tags/$TAG" \
+            --jq ".assets[] | select(.name == \"$APK_NAME\") | .browser_download_url")"
+          RELEASE_NOTES="$(gh api "repos/$REPOSITORY/releases/tags/$TAG" --jq '.body // ""')"
+          VERSION="${TAG#v}"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$RELEASE_NOTES" \
+            --arg url "$APK_URL" \
+            --arg sha256 "$APK_SHA256" \
+            --argjson size "$APK_SIZE" \
+            '{
+              schema: 1,
+              version: $version,
+              notes: $notes,
+              artifact: {
+                arch: "aarch64",
+                url: $url,
+                size: $size,
+                sha256: $sha256
+              }
+            }' > "$RUNNER_TEMP/android-update/android-latest.json"
+          gh release upload "$TAG" \
+            --repo "$REPOSITORY" \
+            --clobber \
+            "$RUNNER_TEMP/android-update/android-latest.json"
+
   sync-gitee:
     name: Sync release to Gitee
-    needs: [build, android]
+    needs: [android-manifest]
     runs-on: ubuntu-latest
     timeout-minutes: 120
 

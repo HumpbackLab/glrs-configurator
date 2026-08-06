@@ -37,6 +37,7 @@
     "stop": "停止",
     "checkUpdate": "检查应用更新",
     "installUpdate": "下载并安装",
+    "continueInstall": "继续安装",
     "checkFirmwareUpdate": "检查固件更新",
     "downloadLatestFirmware": "下载最新固件",
     "flashDownloadedFirmware": "直接刷写已下载固件",
@@ -276,7 +277,7 @@
   },
   "appUpdate": {
     "heading": "配置器更新",
-    "description": "检查并安装 Gyro ELRS Configurator 的新版本。安装时应用将自动关闭，完成后重新启动。",
+    "description": "检查并安装 Gyro ELRS Configurator 的新版本。桌面端会自动安装；Android 会打开系统安装程序等待确认。",
     "source": "更新源",
     "sourceGitee": "Gitee（国内推荐）",
     "sourceGithub": "GitHub",
@@ -287,6 +288,8 @@
       "current": "当前已是最新版本（{current}）",
       "available": "发现新版本 {version}，当前版本为 {current}",
       "downloading": "正在下载版本 {version}",
+      "permission": "请在系统设置中允许安装未知应用，返回后点击“继续安装”",
+      "installing": "已打开系统安装程序，请确认安装新版本",
       "installed": "更新已安装，正在重新启动…",
       "error": "检查或安装更新失败",
       "unsupported": "浏览器开发模式不支持应用自动更新"
