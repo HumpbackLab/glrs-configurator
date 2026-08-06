@@ -1,6 +1,6 @@
 [package]
 name = "gyro-elrs-configurator"
-version = "0.1.5"
+version = "0.1.6"
 description = "Configurator for ELRS basic flight-control receivers"
 authors = ["ExpressLRS"]
 edition = "2021"
