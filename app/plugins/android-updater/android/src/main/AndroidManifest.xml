@@ -4,7 +4,7 @@
 
     <application>
         <provider
-            android:name="androidx.core.content.FileProvider"
+            android:name=".AndroidUpdaterFileProvider"
             android:authorities="${applicationId}.androidupdater.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">

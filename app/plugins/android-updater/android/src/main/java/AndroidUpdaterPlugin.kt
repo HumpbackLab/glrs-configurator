@@ -14,6 +14,8 @@ import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import java.io.File
 
+class AndroidUpdaterFileProvider : FileProvider()
+
 @InvokeArg
 class InstallArgs {
     lateinit var path: String
