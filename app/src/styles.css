@@ -1388,3 +1388,100 @@ button:disabled {
     justify-content: flex-start;
   }
 }
+.pid-log-layout {
+  display: grid;
+  gap: 18px;
+}
+
+.pid-chart-panel {
+  min-width: 0;
+}
+
+.pid-time-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.pid-time-controls #pid-window-label {
+  min-width: 68px;
+  color: #475569;
+  font-variant-numeric: tabular-nums;
+}
+
+.pid-timeline-label {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.pid-timeline-label input {
+  width: 100%;
+}
+
+.pid-mode-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.pid-mode-tabs button {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #334155;
+  padding: 8px 22px;
+  font-weight: 700;
+}
+
+.pid-mode-tabs button.active {
+  border-color: #0f766e;
+  background: #ccfbf1;
+  color: #115e59;
+}
+
+.pid-chart-block {
+  margin-top: 18px;
+}
+
+.pid-chart-block.hidden {
+  display: none;
+}
+
+.pid-chart-block canvas {
+  display: block;
+  width: 100%;
+  height: 320px;
+  margin-top: 10px;
+  border-radius: 8px;
+  background: #fff;
+  cursor: ew-resize;
+}
+
+.pid-series {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.pid-series label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pid-series label span {
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--series-color);
+}
+
+@media (max-width: 700px) {
+  .pid-chart-block canvas { height: 260px; }
+}

@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::io::{ErrorKind, Read, Write};
-use std::net::{Shutdown, TcpStream, ToSocketAddrs};
+use std::net::{Shutdown, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::Manager;
@@ -11,6 +11,69 @@ const MSP_DEBUG_TIMEOUT_MS: u64 = 500;
 
 struct MspDebugState {
     stream: Mutex<Option<TcpStream>>,
+}
+
+struct PidUdpState(Mutex<Option<UdpSocket>>);
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PidUdpSample {
+    mode: u8, sequence: u32, timestamp_ms: u32, loop_time_us: u16, armed: bool,
+    angle_roll_target: f32, angle_pitch_target: f32,
+    angle_roll_state: f32, angle_pitch_state: f32,
+    rate_roll_target: f32, rate_pitch_target: f32, rate_yaw_target: f32,
+    rate_roll_state: f32, rate_pitch_state: f32, rate_yaw_state: f32,
+}
+
+fn crc16_ccitt(data: &[u8]) -> u16 {
+    let mut crc = 0xffffu16;
+    for value in data { crc ^= (*value as u16) << 8; for _ in 0..8 { crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x1021 } else { crc << 1 }; } }
+    crc
+}
+
+fn le_f32(data: &[u8], offset: usize) -> f32 { f32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) }
+
+#[tauri::command]
+fn pid_udp_start(state: tauri::State<PidUdpState>) -> Result<(), String> {
+    let socket = UdpSocket::bind(("0.0.0.0", 14580)).map_err(|e| e.to_string())?;
+    socket.set_nonblocking(true).map_err(|e| e.to_string())?;
+    *state.0.lock().map_err(|_| "PID UDP state poisoned")? = Some(socket);
+    Ok(())
+}
+
+#[tauri::command]
+fn pid_udp_stop(state: tauri::State<PidUdpState>) -> Result<(), String> {
+    state.0.lock().map_err(|_| "PID UDP state poisoned")?.take(); Ok(())
+}
+
+#[tauri::command]
+fn pid_udp_poll(state: tauri::State<PidUdpState>) -> Result<Vec<PidUdpSample>, String> {
+    let guard = state.0.lock().map_err(|_| "PID UDP state poisoned")?;
+    let socket = guard.as_ref().ok_or("PID UDP receiver is not started")?;
+    let mut result = Vec::new();
+    loop {
+        let mut packet = [0u8; 60];
+        match socket.recv(&mut packet) {
+            Ok(60) if &packet[0..4] == b"GLRS" && packet[4] == 1 => {
+                let expected = u16::from_le_bytes([packet[18], packet[19]]);
+                packet[18] = 0; packet[19] = 0;
+                if crc16_ccitt(&packet) != expected { continue; }
+                result.push(PidUdpSample {
+                    mode: packet[5], sequence: u32::from_le_bytes(packet[8..12].try_into().unwrap()),
+                    timestamp_ms: u32::from_le_bytes(packet[12..16].try_into().unwrap()),
+                    loop_time_us: u16::from_le_bytes(packet[16..18].try_into().unwrap()), armed: packet[6] & 1 != 0,
+                    angle_roll_target: le_f32(&packet, 20), angle_pitch_target: le_f32(&packet, 24),
+                    angle_roll_state: le_f32(&packet, 28), angle_pitch_state: le_f32(&packet, 32),
+                    rate_roll_target: le_f32(&packet, 36), rate_pitch_target: le_f32(&packet, 40), rate_yaw_target: le_f32(&packet, 44),
+                    rate_roll_state: le_f32(&packet, 48), rate_pitch_state: le_f32(&packet, 52), rate_yaw_state: le_f32(&packet, 56),
+                });
+            }
+            Ok(_) => continue,
+            Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(result)
 }
 
 #[derive(Serialize)]
@@ -1209,6 +1272,7 @@ pub fn run() {
         .manage(MspDebugState {
             stream: Mutex::new(None),
         })
+        .manage(PidUdpState(Mutex::new(None)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1237,6 +1301,9 @@ pub fn run() {
             msp_debug_connect,
             msp_debug_disconnect,
             msp_debug_poll,
+            pid_udp_start,
+            pid_udp_stop,
+            pid_udp_poll,
             #[cfg(desktop)]
             app_updates::check_app_update,
             #[cfg(desktop)]

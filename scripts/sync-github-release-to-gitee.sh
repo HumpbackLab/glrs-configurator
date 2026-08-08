@@ -311,9 +311,6 @@ if [[ -n $manifest_branch ]]; then
     --write-out '%{http_code}' --get "${gitee_auth[@]}" \
     --data-urlencode "ref=$manifest_branch" \
     "$content_url")
-  if [[ $content_status == 200 && $(jq -r 'type' "$tmp_dir/gitee-content.json") != object ]]; then
-    content_status=404
-  fi
   manifest_base64=$(base64 < "$manifest_file" | tr -d '\n')
   content_form=(
     --data-urlencode "content=$manifest_base64"
@@ -353,9 +350,6 @@ if [[ -n $manifest_branch ]]; then
     --write-out '%{http_code}' --get "${gitee_auth[@]}" \
     --data-urlencode "ref=$manifest_branch" \
     "$android_content_url")
-  if [[ $android_content_status == 200 && $(jq -r 'type' "$tmp_dir/gitee-android-content.json") != object ]]; then
-    android_content_status=404
-  fi
   android_manifest_base64=$(base64 < "$android_manifest_file" | tr -d '\n')
   android_content_form=(
     --data-urlencode "content=$android_manifest_base64"

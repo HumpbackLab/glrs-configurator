@@ -72,6 +72,24 @@ const state = {
   debugError: '',
   debugPolling: false,
   debugPollRateHz: 20,
+  pidLogs: [],
+  pidLogStatus: {ready: false, preparing: false, recording: false, rearmRequired: false},
+  pidLogError: '',
+  pidLogLoading: false,
+  pidLogActive: null,
+  pidLogMode: 'rate',
+  pidLogSamples: [],
+  pidLogVisible: {},
+  pidLogRaw: null,
+  pidLiveReceiving: false,
+  pidLivePackets: 0,
+  pidLiveLost: 0,
+  pidLiveDuplicates: 0,
+  pidLiveLastSequence: null,
+  pidLiveRateHz: 0,
+  pidLiveWindowSeconds: 10,
+  pidLiveViewEndUs: null,
+  pidLiveFollowLatest: true,
   profileDraft: null,
   profileOriginal: null,
   profileCompatibility: null,
@@ -103,6 +121,8 @@ let debugAircraftView = null;
 let pwmRuntimeUpdateTimer = null;
 let pwmRuntimeUpdateInFlight = false;
 let pwmRuntimePendingValues = null;
+let pidLiveTimer = null;
+let pidLiveRateWindow = [];
 
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -112,6 +132,7 @@ const tabs = [
   ['model', () => t('tab.model')],
   ['pwm', () => t('tab.pwm')],
   ['flight', () => t('tab.flight')],
+  ['pidlog', () => t('tab.pidlog')],
   ['debug', () => t('tab.debug')],
   ['hardware', () => t('tab.hardware')],
   ['wifi', () => t('tab.wifi')],
@@ -923,6 +944,15 @@ async function saveFlight(event) {
       const end = intOrDefault(form[`fc_${mode}_end`].value, 0);
       if (start < 900 || end > 2100 || start >= end) throw new Error(`${t('message.invalidRange')}: ${mode.toUpperCase()}`);
       nextConfig.fc_mode_conditions[mode] = [channel, start, end];
+    });
+    nextConfig.fc_wifi_conditions = {};
+    ['rf', 'wifi', 'coexist'].forEach((mode) => {
+      if (!form[`fc_wifi_${mode}_enabled`].checked) return;
+      const channel = intOrDefault(form[`fc_wifi_${mode}_channel`].value, 7);
+      const start = intOrDefault(form[`fc_wifi_${mode}_start`].value, 0);
+      const end = intOrDefault(form[`fc_wifi_${mode}_end`].value, 0);
+      if (start < 900 || end > 2100 || start >= end) throw new Error(`${t('message.invalidRange')}: ${mode.toUpperCase()}`);
+      nextConfig.fc_wifi_conditions[mode] = [channel, start, end];
     });
     nextConfig.fc_arm_enabled = form.fc_arm_enabled.checked;
     nextConfig.fc_arm_channel = intOrDefault(form.fc_arm_channel.value, 5);
@@ -2603,6 +2633,9 @@ function renderFlight() {
   const mixer = flightConfigValue('fc_mixer', []);
   const mixerServos = flightConfigValue('fc_mixer_servos', []);
   const modeConditions = flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 1700]});
+  const wifiConditions = flightConfigValue('fc_wifi_conditions', {
+    rf: [7, 900, 1300], wifi: [7, 1300, 1700], coexist: [7, 1700, 2100],
+  });
   const armEnabled = flightConfigValue('fc_arm_enabled', false);
   const armChannel = flightConfigValue('fc_arm_channel', 5);
   const armRange = flightConfigValue('fc_arm_range', [1700, 2100]);
@@ -2628,6 +2661,16 @@ function renderFlight() {
           <div class="mode-range-list">
             ${renderActivationRange('rate', 'RATE', t('flight.rateDescription'), modeConditions.rate?.slice(1) ?? [1300, 1700], '#2f80c4', !modeConditions.rate, modeConditions.rate?.[0] ?? 6, auxOptions)}
             ${renderActivationRange('angle', 'ANGLE', t('flight.angleDescription'), modeConditions.angle?.slice(1) ?? [1700, 2100], '#1f8f75', !modeConditions.angle, modeConditions.angle?.[0] ?? 6, auxOptions)}
+          </div>
+        </div>
+        <div class="mode-config">
+          <div class="mode-config-header">
+            <div><h3>${t('flight.wifiModeRanges')}</h3><div class="helper">${t('flight.wifiRangeHelp')}</div></div>
+          </div>
+          <div class="mode-range-list">
+            ${renderActivationRange('wifi_rf', t('flight.wifiRf'), t('flight.wifiRfDescription'), wifiConditions.rf?.slice(1) ?? [900, 1300], '#64748b', !wifiConditions.rf, wifiConditions.rf?.[0] ?? 7, auxOptions)}
+            ${renderActivationRange('wifi_wifi', t('flight.wifiOnly'), t('flight.wifiOnlyDescription'), wifiConditions.wifi?.slice(1) ?? [1300, 1700], '#7c3aed', !wifiConditions.wifi, wifiConditions.wifi?.[0] ?? 7, auxOptions)}
+            ${renderActivationRange('wifi_coexist', t('flight.wifiCoexist'), t('flight.wifiCoexistDescription'), wifiConditions.coexist?.slice(1) ?? [1700, 2100], '#0891b2', !wifiConditions.coexist, wifiConditions.coexist?.[0] ?? 7, auxOptions)}
           </div>
         </div>
         <div class="mode-config arm-config" id="arm-mode-config">
@@ -2757,6 +2800,304 @@ function renderDebug() {
         </div>
       </section>
     </div>`;
+}
+
+const PID_LOG_MAGIC = 0x474c5253;
+const pidRateSeries = [
+  ['rateRollTarget', 'Roll target', '#2563eb'], ['rateRollState', 'Roll state', '#60a5fa'],
+  ['ratePitchTarget', 'Pitch target', '#dc2626'], ['ratePitchState', 'Pitch state', '#f87171'],
+  ['rateYawTarget', 'Yaw target', '#16a34a'], ['rateYawState', 'Yaw state', '#4ade80'],
+];
+const pidAngleSeries = [
+  ['angleRollTarget', 'Roll target', '#7c3aed'], ['angleRollState', 'Roll state', '#a78bfa'],
+  ['anglePitchTarget', 'Pitch target', '#ea580c'], ['anglePitchState', 'Pitch state', '#fb923c'],
+];
+
+function pidLogDuration(ms) {
+  const seconds = Math.max(0, Math.round(Number(ms) / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const value of bytes) {
+    crc ^= value;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function parsePidLog(buffer) {
+  const view = new DataView(buffer);
+  if (view.byteLength < 64 || view.getUint32(0, true) !== PID_LOG_MAGIC) throw new Error(t('pidlog.invalidFile'));
+  const version = view.getUint16(4, true);
+  const headerSize = view.getUint16(6, true);
+  const recordSize = view.getUint16(8, true);
+  const recordCount = view.getUint32(24, true);
+  const dataBytes = view.getUint32(32, true);
+  const expectedCrc = view.getUint32(36, true);
+  if (version !== 1 || headerSize !== 64 || recordSize !== 32 || dataBytes !== recordCount * recordSize || headerSize + dataBytes > view.byteLength) {
+    throw new Error(t('pidlog.unsupportedFile'));
+  }
+  const actualCrc = crc32(new Uint8Array(buffer, headerSize, dataBytes));
+  if (actualCrc !== expectedCrc) throw new Error(t('pidlog.crcError'));
+  const samples = [];
+  for (let index = 0; index < recordCount; index += 1) {
+    const offset = headerSize + index * recordSize;
+    samples.push({
+      timeUs: view.getUint32(offset, true), sequence: view.getUint32(offset + 4, true), mode: view.getUint8(offset + 8),
+      loopTimeUs: view.getUint16(offset + 10, true),
+      angleRollTarget: view.getInt16(offset + 12, true) / 100, anglePitchTarget: view.getInt16(offset + 14, true) / 100,
+      angleRollState: view.getInt16(offset + 16, true) / 100, anglePitchState: view.getInt16(offset + 18, true) / 100,
+      rateRollTarget: view.getInt16(offset + 20, true) / 10, ratePitchTarget: view.getInt16(offset + 22, true) / 10,
+      rateYawTarget: view.getInt16(offset + 24, true) / 10, rateRollState: view.getInt16(offset + 26, true) / 10,
+      ratePitchState: view.getInt16(offset + 28, true) / 10, rateYawState: view.getInt16(offset + 30, true) / 10,
+    });
+  }
+  return {
+    id: view.getUint32(12, true), durationMs: view.getUint32(20, true), droppedRecords: view.getUint32(28, true),
+    sampleRateHz: view.getUint16(10, true), samples,
+  };
+}
+
+async function loadPidLogs() {
+  state.pidLogLoading = true;
+  state.pidLogError = '';
+  render();
+  try {
+    const response = await apiFetch('/pidlogs', {timeout: 10000});
+    const result = await response.json();
+    state.pidLogs = Array.isArray(result.logs) ? result.logs.sort((a, b) => b.id - a.id) : [];
+    state.pidLogStatus = {
+      ready: Boolean(result.ready), preparing: Boolean(result.preparing), recording: Boolean(result.recording),
+      rearmRequired: Boolean(result.rearm_required),
+    };
+  } catch (error) {
+    state.pidLogError = error.message || String(error);
+  } finally {
+    state.pidLogLoading = false;
+    render();
+  }
+}
+
+async function openPidLog() {
+  state.pidLogLoading = true;
+  state.pidLogError = '';
+  render();
+  try {
+    const blob = await apiFetchBlob('/pidlogs/download', 60000);
+    const buffer = await blob.arrayBuffer();
+    state.pidLogActive = parsePidLog(buffer);
+    state.pidLogSamples = state.pidLogActive.samples;
+    state.pidLogRaw = blob;
+    const hasAngle = state.pidLogSamples.some((sample) => sample.mode === 2);
+    state.pidLogMode = hasAngle ? 'angle' : 'rate';
+  } catch (error) {
+    state.pidLogError = error.message || String(error);
+  } finally {
+    state.pidLogLoading = false;
+    render();
+  }
+}
+
+async function erasePidLogs() {
+  if (!window.confirm(t('pidlog.eraseConfirm'))) return;
+  try {
+    await apiFetch('/pidlogs/erase', {method: 'POST', body: '{}', timeout: 30000});
+    state.pidLogActive = null;
+    state.pidLogSamples = [];
+    state.pidLogRaw = null;
+    await loadPidLogs();
+  } catch (error) {
+    state.pidLogError = error.message || String(error);
+    render();
+  }
+}
+
+async function preparePidLog() {
+  if (!window.confirm(t('pidlog.prepareConfirm'))) return;
+  try {
+    await apiFetch('/pidlogs/prepare', {method: 'POST', body: '{}', timeout: 10000});
+    state.pidLogActive = null;
+    state.pidLogSamples = [];
+    state.pidLogRaw = null;
+    await loadPidLogs();
+  } catch (error) {
+    state.pidLogError = error.message || String(error);
+    render();
+  }
+}
+
+function savePidLogFile() {
+  if (!state.pidLogRaw || !state.pidLogActive) return;
+  const url = URL.createObjectURL(state.pidLogRaw);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `glrs-pid-${state.pidLogActive.id}.glrslog`;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function renderPidLegend(series) {
+  return `<div class="pid-series">${series.map(([key, label, color]) => `<label><input type="checkbox" data-pid-series="${key}" ${state.pidLogVisible[key] === false ? '' : 'checked'}><span style="--series-color:${color}"></span>${label}</label>`).join('')}</div>`;
+}
+
+function renderPidLog() {
+  return `<div class="pid-log-layout">
+    <section class="panel">
+      <div class="panel-heading"><div><h2>PID 波形</h2><div class="helper">监听 UDP 14580；曲线按实际收到的数据点连接，不补点、不插值。</div></div></div>
+      <div class="actions"><button class="primary" type="button" data-action="pidlive-${state.pidLiveReceiving ? 'stop' : 'start'}">${state.pidLiveReceiving ? '暂停接收' : '开始接收'}</button><button class="secondary" type="button" data-action="pidlive-clear">清空当前数据</button><button class="secondary" type="button" data-action="pidlive-save" ${state.pidLogSamples.length ? '' : 'disabled'}>保存原始数据</button></div>
+      ${state.pidLogError ? `<div class="message error">${escapeHtml(state.pidLogError)}</div>` : ''}
+      <div class="metrics"><div class="metric"><span>接收频率</span><strong>${state.pidLiveRateHz.toFixed(1)} Hz</strong></div><div class="metric"><span>数据点</span><strong>${state.pidLivePackets.toLocaleString()}</strong></div><div class="metric"><span>UDP 丢包</span><strong>${state.pidLiveLost.toLocaleString()}</strong></div><div class="metric"><span>重复包</span><strong>${state.pidLiveDuplicates.toLocaleString()}</strong></div></div>
+      <div class="pid-time-controls">
+        <label>显示时间窗口 <select id="pid-live-window">${![0, 5, 10, 30].includes(state.pidLiveWindowSeconds) ? `<option value="${state.pidLiveWindowSeconds}" selected>${state.pidLiveWindowSeconds.toFixed(2)} s</option>` : ''}<option value="5" ${state.pidLiveWindowSeconds === 5 ? 'selected' : ''}>5 s</option><option value="10" ${state.pidLiveWindowSeconds === 10 ? 'selected' : ''}>10 s</option><option value="30" ${state.pidLiveWindowSeconds === 30 ? 'selected' : ''}>30 s</option><option value="0" ${state.pidLiveWindowSeconds === 0 ? 'selected' : ''}>全部</option></select></label>
+        <span id="pid-window-label">${state.pidLiveWindowSeconds ? `${state.pidLiveWindowSeconds.toFixed(2)} s` : '全部'}</span>
+        <button class="secondary" type="button" id="pid-follow-latest" ${state.pidLiveFollowLatest ? 'disabled' : ''}>回到最新</button>
+      </div>
+      <label class="pid-timeline-label">历史位置 <input id="pid-live-timeline" type="range" min="0" max="1000" step="1" value="1000"></label>
+      <div class="helper">在波形上滚动鼠标滚轮可缩放横轴；拖动进度条可回看此前数据。纵轴会根据当前可见波形自动调整。</div>
+    </section>
+    <section class="panel pid-chart-panel">
+      <div class="panel-heading"><div><h2>实时波形</h2><div class="helper">关闭曲线仅停止渲染，内存中的采样数据会继续保留。</div></div></div>
+      <div class="pid-mode-tabs"><button type="button" data-pid-mode="rate" class="${state.pidLogMode === 'rate' ? 'active' : ''}">RATE</button><button type="button" data-pid-mode="angle" class="${state.pidLogMode === 'angle' ? 'active' : ''}">ANGLE</button></div>
+      <div class="pid-chart-block ${state.pidLogMode === 'angle' ? '' : 'hidden'}"><h3>${t('pidlog.angleLoop')}</h3>${renderPidLegend(pidAngleSeries)}<canvas id="pid-angle-chart"></canvas></div>
+      <div class="pid-chart-block"><h3>${t('pidlog.rateLoop')}</h3>${renderPidLegend(pidRateSeries)}<canvas id="pid-rate-chart"></canvas></div>
+    </section>
+  </div>`;
+}
+
+function drawPidChart(canvas, samples, series) {
+  if (!canvas || samples.length < 2) return;
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(320, canvas.clientWidth);
+  const height = Math.max(240, canvas.clientHeight);
+  canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
+  const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr);
+  const visible = series.filter(([key]) => state.pidLogVisible[key] !== false);
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, width, height);
+  if (!visible.length) return;
+  let minY = Infinity; let maxY = -Infinity;
+  for (const sample of samples) for (const [key] of visible) { minY = Math.min(minY, sample[key]); maxY = Math.max(maxY, sample[key]); }
+  if (minY === maxY) { minY -= 1; maxY += 1; }
+  const pad = Math.max(1, (maxY - minY) * 0.08); minY -= pad; maxY += pad;
+  const left = 54; const top = 15; const right = 12; const bottom = 30;
+  const t0 = samples[0].timeUs; const span = Math.max(1, samples[samples.length - 1].timeUs - t0);
+  ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 1; ctx.strokeRect(left, top, width - left - right, height - top - bottom);
+  ctx.fillStyle = '#64748b'; ctx.font = '12px sans-serif'; ctx.fillText(maxY.toFixed(1), 4, top + 5); ctx.fillText(minY.toFixed(1), 4, height - bottom);
+  for (const [key, , color] of visible) {
+    ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 1.25;
+    samples.forEach((sample, index) => {
+      const x = left + ((sample.timeUs - t0) / span) * (width - left - right);
+      const y = top + ((maxY - sample[key]) / (maxY - minY)) * (height - top - bottom);
+      if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+}
+
+function drawPidCharts() {
+  const allModeSamples = state.pidLogSamples.filter((sample) => sample.mode === (state.pidLogMode === 'angle' ? 2 : 1));
+  let modeSamples = allModeSamples;
+  if (state.pidLiveWindowSeconds && allModeSamples.length) {
+    const firstUs = allModeSamples[0].timeUs;
+    const latestUs = allModeSamples[allModeSamples.length - 1].timeUs;
+    const windowUs = state.pidLiveWindowSeconds * 1e6;
+    const earliestEndUs = Math.min(latestUs, firstUs + windowUs);
+    if (state.pidLiveFollowLatest || state.pidLiveViewEndUs === null) state.pidLiveViewEndUs = latestUs;
+    state.pidLiveViewEndUs = Math.max(earliestEndUs, Math.min(latestUs, state.pidLiveViewEndUs));
+    modeSamples = allModeSamples.filter((sample) => sample.timeUs >= state.pidLiveViewEndUs - windowUs && sample.timeUs <= state.pidLiveViewEndUs);
+    const timeline = document.querySelector('#pid-live-timeline');
+    if (timeline) timeline.value = latestUs === earliestEndUs ? 1000 : Math.round((state.pidLiveViewEndUs - earliestEndUs) / (latestUs - earliestEndUs) * 1000);
+  }
+  const label = document.querySelector('#pid-window-label');
+  if (label) label.textContent = state.pidLiveWindowSeconds ? `${state.pidLiveWindowSeconds.toFixed(2)} s` : '全部';
+  drawPidChart(document.querySelector('#pid-rate-chart'), modeSamples, pidRateSeries);
+  if (state.pidLogMode === 'angle') drawPidChart(document.querySelector('#pid-angle-chart'), modeSamples, pidAngleSeries);
+}
+
+function zoomPidTimeline(event) {
+  if (!state.pidLogSamples.length) return;
+  event.preventDefault();
+  const samples = state.pidLogSamples.filter((sample) => sample.mode === (state.pidLogMode === 'angle' ? 2 : 1));
+  if (samples.length < 2) return;
+  const fullSeconds = Math.max(0.05, (samples[samples.length - 1].timeUs - samples[0].timeUs) / 1e6);
+  const currentSeconds = state.pidLiveWindowSeconds || fullSeconds;
+  const latestUs = samples[samples.length - 1].timeUs;
+  const oldWindowUs = currentSeconds * 1e6;
+  const oldEndUs = state.pidLiveFollowLatest || state.pidLiveViewEndUs === null ? latestUs : state.pidLiveViewEndUs;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const anchor = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
+  const anchorUs = oldEndUs - oldWindowUs + anchor * oldWindowUs;
+  state.pidLiveWindowSeconds = Math.max(0.05, Math.min(fullSeconds, currentSeconds * Math.exp(event.deltaY * 0.001)));
+  const newWindowUs = state.pidLiveWindowSeconds * 1e6;
+  const earliestEndUs = Math.min(latestUs, samples[0].timeUs + newWindowUs);
+  state.pidLiveViewEndUs = Math.max(earliestEndUs, Math.min(latestUs, anchorUs + (1 - anchor) * newWindowUs));
+  state.pidLiveFollowLatest = Math.abs(state.pidLiveViewEndUs - latestUs) < 1;
+  const followButton = document.querySelector('#pid-follow-latest');
+  if (followButton) followButton.disabled = state.pidLiveFollowLatest;
+  drawPidCharts();
+}
+
+function seekPidTimeline(value) {
+  const samples = state.pidLogSamples.filter((sample) => sample.mode === (state.pidLogMode === 'angle' ? 2 : 1));
+  if (!samples.length || !state.pidLiveWindowSeconds) return;
+  const firstUs = samples[0].timeUs;
+  const latestUs = samples[samples.length - 1].timeUs;
+  const earliestEndUs = Math.min(latestUs, firstUs + state.pidLiveWindowSeconds * 1e6);
+  state.pidLiveViewEndUs = earliestEndUs + (latestUs - earliestEndUs) * Number(value) / 1000;
+  state.pidLiveFollowLatest = Number(value) >= 1000;
+  const followButton = document.querySelector('#pid-follow-latest');
+  if (followButton) followButton.disabled = state.pidLiveFollowLatest;
+  drawPidCharts();
+}
+
+async function pollPidLive() {
+  if (!state.pidLiveReceiving) return;
+  try {
+    const samples = await tauriInvoke('pid_udp_poll');
+    const now = performance.now();
+    for (const sample of samples) {
+      if (state.pidLiveLastSequence !== null) {
+        const delta = (sample.sequence - state.pidLiveLastSequence) >>> 0;
+        if (delta === 0) { state.pidLiveDuplicates += 1; continue; }
+        if (delta > 1 && delta < 0x80000000) state.pidLiveLost += delta - 1;
+      }
+      state.pidLiveLastSequence = sample.sequence;
+      state.pidLivePackets += 1;
+      state.pidLogSamples.push({...sample, timeUs: sample.timestampMs * 1000});
+      pidLiveRateWindow.push(now);
+    }
+    pidLiveRateWindow = pidLiveRateWindow.filter((time) => now - time <= 1000);
+    state.pidLiveRateHz = pidLiveRateWindow.length;
+    if (samples.length) { render(); pidLiveTimer = window.setTimeout(pollPidLive, 20); return; }
+  } catch (error) { state.pidLogError = error.message || String(error); await stopPidLive(); render(); return; }
+  pidLiveTimer = window.setTimeout(pollPidLive, 20);
+}
+
+async function startPidLive() {
+  try { await tauriInvoke('pid_udp_start'); state.pidLiveReceiving = true; state.pidLogError = ''; pollPidLive(); }
+  catch (error) { state.pidLogError = error.message || String(error); }
+  render();
+}
+
+async function stopPidLive() {
+  state.pidLiveReceiving = false;
+  if (pidLiveTimer) window.clearTimeout(pidLiveTimer);
+  pidLiveTimer = null;
+  try { await tauriInvoke('pid_udp_stop'); } catch (_) { /* already stopped */ }
+}
+
+function clearPidLive() {
+  state.pidLogSamples = []; state.pidLivePackets = 0; state.pidLiveLost = 0; state.pidLiveDuplicates = 0;
+  state.pidLiveLastSequence = null; state.pidLiveRateHz = 0; state.pidLiveViewEndUs = null;
+  state.pidLiveFollowLatest = true; pidLiveRateWindow = []; render();
+}
+
+function savePidLive() {
+  const keys = ['timestampMs','sequence','mode','loopTimeUs','armed','angleRollTarget','angleRollState','anglePitchTarget','anglePitchState','rateRollTarget','rateRollState','ratePitchTarget','ratePitchState','rateYawTarget','rateYawState'];
+  const csv = [keys.join(','), ...state.pidLogSamples.map((sample) => keys.map((key) => sample[key]).join(','))].join('\n');
+  const url = URL.createObjectURL(new Blob([csv], {type: 'text/csv'})); const anchor = document.createElement('a');
+  anchor.href = url; anchor.download = `glrs-pid-live-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function updateDebugView() {
@@ -2892,6 +3233,7 @@ function renderCurrentTab() {
     model: renderModel,
     pwm: renderPwm,
     flight: renderFlight,
+    pidlog: renderPidLog,
     debug: renderDebug,
     hardware: renderHardwareJson,
     wifi: renderWifi,
@@ -3242,6 +3584,27 @@ function wireEvents() {
     });
   });
 
+  document.querySelectorAll('[data-pid-mode]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.pidLogMode = button.dataset.pidMode;
+      render();
+    });
+  });
+  document.querySelectorAll('[data-pid-series]').forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      state.pidLogVisible[checkbox.dataset.pidSeries] = checkbox.checked;
+      drawPidCharts();
+    });
+  });
+  document.querySelector('#pid-live-window')?.addEventListener('change', (event) => {
+    state.pidLiveWindowSeconds = Number(event.target.value); state.pidLiveFollowLatest = true; drawPidCharts();
+  });
+  document.querySelectorAll('.pid-chart-block canvas').forEach((canvas) => canvas.addEventListener('wheel', zoomPidTimeline, {passive: false}));
+  document.querySelector('#pid-live-timeline')?.addEventListener('input', (event) => seekPidTimeline(event.target.value));
+  document.querySelector('#pid-follow-latest')?.addEventListener('click', () => {
+    state.pidLiveFollowLatest = true; state.pidLiveViewEndUs = null; render();
+  });
+
   document.querySelector('#runtime-form')?.addEventListener('submit', saveRuntime);
   document.querySelector('#model-form')?.addEventListener('submit', saveModel);
   document.querySelector('#pwm-form')?.addEventListener('submit', savePwm);
@@ -3320,6 +3683,7 @@ function wireEvents() {
   wireOrientationPreview();
   wirePwmForm();
   initDebugAircraftView();
+  drawPidCharts();
 
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -3337,6 +3701,10 @@ function wireEvents() {
       if (action === 'quick-orientation') quickOrientationStep();
       if (action === 'debug-start') startDebugPolling();
       if (action === 'debug-stop') stopDebugPolling();
+      if (action === 'pidlive-start') void startPidLive();
+      if (action === 'pidlive-stop') void stopPidLive().then(render);
+      if (action === 'pidlive-clear') clearPidLive();
+      if (action === 'pidlive-save') savePidLive();
       if (action === 'force-confirm') forceUpdate('confirm');
       if (action === 'force-cancel') forceUpdate('cancel');
       if (action === 'app-update-check') checkAppUpdate();

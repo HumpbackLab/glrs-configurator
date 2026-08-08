@@ -86,5 +86,10 @@ export default defineConfig({
     host: 'localhost',
     port: 5200,
     strictPort: true,
+    watch: {
+      // Rust rebuilds and locks DLLs below this directory on Windows. Vite
+      // must not watch those artifacts or Node's FSWatcher raises EBUSY.
+      ignored: ['**/src-tauri/target/**'],
+    },
   },
 });
