@@ -37,6 +37,7 @@ const state = {
   networks: [],
   message: null,
   busy: false,
+  connectionStatus: 'idle',
   uploadResult: null,
   uploadProgress: null,
   updateSource: loadUpdateSource(),
@@ -69,7 +70,7 @@ const state = {
   eulerYaw: 0,
   orientationCal: null,
   imuSample: null,
-  imuCalibration: {gyroBias: [0, 0, 0], accelBias: [0, 0, 0], accelScale: [1, 1, 1], faces: {}, status: ''},
+  imuCalibration: {gyroBias: [0, 0, 0], accelBias: [0, 0, 0], accelScale: [1, 1, 1], gyroSample: null, faces: {}, active: '', status: ''},
   debugSample: null,
   debugError: '',
   debugPolling: false,
@@ -90,8 +91,8 @@ const state = {
   pidLiveLastSequence: null,
   pidLiveRateHz: 0,
   pidLiveWindowSeconds: 10,
-  pidLiveViewEndUs: null,
-  pidLiveFollowLatest: true,
+  pidChartViews: {},
+  pidChartHover: {},
   profileDraft: null,
   profileOriginal: null,
   profileCompatibility: null,
@@ -135,7 +136,6 @@ const tabs = [
   ['model', () => t('tab.model')],
   ['pwm', () => t('tab.pwm')],
   ['flight', () => t('tab.flight')],
-  ['imu', () => getLocale() === 'zh-CN' ? 'IMU校准' : 'IMU Calibration'],
   ['debug', () => t('tab.debug')],
   ['hardware', () => t('tab.hardware')],
   ['wifi', () => t('tab.wifi')],
@@ -737,6 +737,7 @@ async function loadDevice() {
     apiFetch('/hardware.json').catch(() => ({})),
   ]);
   state.target = target;
+  state.connectionStatus = 'connected';
   state.configResponse = configResponse;
   state.hardware = hardwareResponse;
   const currentFirmwareVersion = (target?.version || '').split(/\s+/, 1)[0];
@@ -788,7 +789,7 @@ async function loadDevice() {
     gyroBias: [...(configResponse?.config?.fc_gyro_bias || [0, 0, 0])],
     accelBias: [...(configResponse?.config?.fc_accel_bias || [0, 0, 0])],
     accelScale: [...(configResponse?.config?.fc_accel_scale || [1, 1, 1])],
-    faces: {}, status: '',
+    gyroSample: null, faces: {}, active: '', status: '',
   };
   if (state.profileOriginal) {
     try {
@@ -812,6 +813,29 @@ async function loadDevice() {
   if (!state.bindingPhrase) {
     state.bindingPhrase = '';
   }
+}
+
+async function connectDevice(successText) {
+  state.connectionStatus = 'connecting';
+  render();
+  await runBusy(async () => {
+    try {
+      await loadDevice();
+    } catch (error) {
+      state.connectionStatus = 'error';
+      throw error;
+    }
+  }, successText);
+}
+
+function connectionStatusDisplay() {
+  const zh = getLocale() === 'zh-CN';
+  return {
+    connected: {label: zh ? '已连接' : 'Connected', detail: state.target?.target || state.target?.['module-type'] || ''},
+    connecting: {label: zh ? '正在连接' : 'Connecting', detail: ''},
+    error: {label: zh ? '连接失败' : 'Connection failed', detail: ''},
+    idle: {label: zh ? '未连接' : 'Disconnected', detail: ''},
+  }[state.connectionStatus] || {label: zh ? '未连接' : 'Disconnected', detail: ''};
 }
 
 function configValue(key, fallback) {
@@ -955,7 +979,7 @@ async function saveFlight(event) {
       nextConfig.fc_mode_conditions[mode] = [channel, start, end];
     });
     nextConfig.fc_wifi_conditions = {};
-    ['rf', 'wifi', 'coexist'].forEach((mode) => {
+    ['rf', 'coexist'].forEach((mode) => {
       if (!form[`fc_wifi_${mode}_enabled`].checked) return;
       const channel = intOrDefault(form[`fc_wifi_${mode}_channel`].value, 7);
       const start = intOrDefault(form[`fc_wifi_${mode}_start`].value, 0);
@@ -2643,7 +2667,7 @@ function renderFlight() {
   const mixerServos = flightConfigValue('fc_mixer_servos', []);
   const modeConditions = flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 1700]});
   const wifiConditions = flightConfigValue('fc_wifi_conditions', {
-    rf: [7, 900, 1300], wifi: [7, 1300, 1700], coexist: [7, 1700, 2100],
+    rf: [7, 900, 1300], coexist: [7, 1700, 2100],
   });
   const armEnabled = flightConfigValue('fc_arm_enabled', false);
   const armChannel = flightConfigValue('fc_arm_channel', 5);
@@ -2678,7 +2702,6 @@ function renderFlight() {
           </div>
           <div class="mode-range-list">
             ${renderActivationRange('wifi_rf', t('flight.wifiRf'), t('flight.wifiRfDescription'), wifiConditions.rf?.slice(1) ?? [900, 1300], '#64748b', !wifiConditions.rf, wifiConditions.rf?.[0] ?? 7, auxOptions)}
-            ${renderActivationRange('wifi_wifi', t('flight.wifiOnly'), t('flight.wifiOnlyDescription'), wifiConditions.wifi?.slice(1) ?? [1300, 1700], '#7c3aed', !wifiConditions.wifi, wifiConditions.wifi?.[0] ?? 7, auxOptions)}
             ${renderActivationRange('wifi_coexist', t('flight.wifiCoexist'), t('flight.wifiCoexistDescription'), wifiConditions.coexist?.slice(1) ?? [1700, 2100], '#0891b2', !wifiConditions.coexist, wifiConditions.coexist?.[0] ?? 7, auxOptions)}
           </div>
         </div>
@@ -2766,6 +2789,7 @@ function renderFlight() {
             </div>
           </div>
         </div>
+        ${renderImuCalibration()}
         <div class="actions"><button class="primary" ${state.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot">${t('action.reboot')}</button></div>
       </form>
     </section>`;
@@ -2823,6 +2847,29 @@ const pidAngleSeries = [
   ['angleRollTarget', 'Roll target', '#7c3aed'], ['angleRollState', 'Roll state', '#a78bfa'],
   ['anglePitchTarget', 'Pitch target', '#ea580c'], ['anglePitchState', 'Pitch state', '#fb923c'],
 ];
+
+function pidChartDefinitions() {
+  if (state.pidLogMode === 'angle') {
+    return [
+      {key: 'angle', title: 'Roll / Pitch 角度', unit: 'deg', series: pidAngleSeries},
+    ];
+  }
+  return [
+    {key: 'rate', title: 'Roll / Pitch / Yaw 角速度', unit: 'deg/s', series: pidRateSeries},
+  ];
+}
+
+function pidSamplesForDisplay() {
+  if (state.pidLogMode === 'angle') return state.pidLogSamples.filter((sample) => sample.mode === 2);
+  // Rate targets and states remain meaningful while ANGLE mode is active, so
+  // the angular-rate view includes samples produced by both control modes.
+  return state.pidLogSamples.filter((sample) => sample.mode === 1 || sample.mode === 2);
+}
+
+function pidChartView(key) {
+  if (!state.pidChartViews[key]) state.pidChartViews[key] = {endUs: null, followLatest: true};
+  return state.pidChartViews[key];
+}
 
 function pidLogDuration(ms) {
   const seconds = Math.max(0, Math.round(Number(ms) / 1000));
@@ -2963,31 +3010,29 @@ function renderPidLog() {
       <div class="pid-time-controls">
         <label>显示时间窗口 <select id="pid-live-window">${![0, 5, 10, 30].includes(state.pidLiveWindowSeconds) ? `<option value="${state.pidLiveWindowSeconds}" selected>${state.pidLiveWindowSeconds.toFixed(2)} s</option>` : ''}<option value="5" ${state.pidLiveWindowSeconds === 5 ? 'selected' : ''}>5 s</option><option value="10" ${state.pidLiveWindowSeconds === 10 ? 'selected' : ''}>10 s</option><option value="30" ${state.pidLiveWindowSeconds === 30 ? 'selected' : ''}>30 s</option><option value="0" ${state.pidLiveWindowSeconds === 0 ? 'selected' : ''}>全部</option></select></label>
         <span id="pid-window-label">${state.pidLiveWindowSeconds ? `${state.pidLiveWindowSeconds.toFixed(2)} s` : '全部'}</span>
-        <button class="secondary" type="button" id="pid-follow-latest" ${state.pidLiveFollowLatest ? 'disabled' : ''}>回到最新</button>
       </div>
-      <label class="pid-timeline-label">历史位置 <input id="pid-live-timeline" type="range" min="0" max="1000" step="1" value="1000"></label>
-      <div class="helper">在波形上滚动鼠标滚轮可缩放横轴；拖动进度条可回看此前数据。纵轴会根据当前可见波形自动调整。</div>
+      <div class="helper">角速度图同时包含 RATE 与 ANGLE 飞控模式下的数据；角度图显示 ANGLE 模式的 Roll/Pitch。每张图可独立回看、缩放和查看采样点。</div>
     </section>
     <section class="panel pid-chart-panel">
       <div class="panel-heading"><div><h2>实时波形</h2><div class="helper">关闭曲线仅停止渲染，内存中的采样数据会继续保留。</div></div></div>
-      <div class="pid-mode-tabs"><button type="button" data-pid-mode="rate" class="${state.pidLogMode === 'rate' ? 'active' : ''}">RATE</button><button type="button" data-pid-mode="angle" class="${state.pidLogMode === 'angle' ? 'active' : ''}">ANGLE</button></div>
-      <div class="pid-chart-block ${state.pidLogMode === 'angle' ? '' : 'hidden'}"><h3>${t('pidlog.angleLoop')}</h3>${renderPidLegend(pidAngleSeries)}<canvas id="pid-angle-chart"></canvas></div>
-      <div class="pid-chart-block"><h3>${t('pidlog.rateLoop')}</h3>${renderPidLegend(pidRateSeries)}<canvas id="pid-rate-chart"></canvas></div>
+      <div class="pid-mode-tabs"><button type="button" data-pid-mode="rate" class="${state.pidLogMode === 'rate' ? 'active' : ''}">角速度</button><button type="button" data-pid-mode="angle" class="${state.pidLogMode === 'angle' ? 'active' : ''}">角度</button></div>
+      <div class="pid-chart-heading"><h3>${state.pidLogMode === 'angle' ? t('pidlog.angleLoop') : t('pidlog.rateLoop')}</h3>${renderPidLegend(state.pidLogMode === 'angle' ? pidAngleSeries : pidRateSeries)}</div>
+      <div class="pid-axis-charts">${pidChartDefinitions().map((chart) => `<div class="pid-chart-block" data-pid-chart-block="${chart.key}"><div class="pid-axis-title"><h3>${chart.title}</h3><span>${chart.unit}</span></div><canvas data-pid-chart="${chart.key}"></canvas><div class="pid-chart-timeline"><span>历史位置</span><input data-pid-timeline="${chart.key}" type="range" min="0" max="1000" step="1" value="1000"><button class="secondary" type="button" data-pid-latest="${chart.key}">最新</button></div></div>`).join('')}</div>
     </section>
   </div>`;
 }
 
-function drawPidChart(canvas, samples, series) {
+function drawPidChart(canvas, samples, chart) {
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
   const width = Math.max(320, canvas.clientWidth);
   const height = Math.max(240, canvas.clientHeight);
   canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
   const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr);
-  const visible = series.filter(([key]) => state.pidLogVisible[key] !== false);
-  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, width, height);
+  const visible = chart.series.filter(([key]) => state.pidLogVisible[key] !== false);
+  ctx.fillStyle = '#08131f'; ctx.fillRect(0, 0, width, height);
   if (samples.length < 2) {
-    ctx.fillStyle = '#94a3b8'; ctx.font = '13px sans-serif';
+    ctx.fillStyle = '#8ba2b8'; ctx.font = '13px sans-serif';
     ctx.fillText(state.pidLogMode === 'angle' ? '等待 ANGLE 模式数据…' : '等待 RATE 模式数据…', 18, 30);
     return;
   }
@@ -2998,8 +3043,8 @@ function drawPidChart(canvas, samples, series) {
   const pad = Math.max(1, (maxY - minY) * 0.08); minY -= pad; maxY += pad;
   const left = 54; const top = 15; const right = 12; const bottom = 30;
   const t0 = samples[0].timeUs; const span = Math.max(1, samples[samples.length - 1].timeUs - t0);
-  ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 1; ctx.strokeRect(left, top, width - left - right, height - top - bottom);
-  ctx.fillStyle = '#64748b'; ctx.font = '12px sans-serif'; ctx.fillText(maxY.toFixed(1), 4, top + 5); ctx.fillText(minY.toFixed(1), 4, height - bottom);
+  ctx.strokeStyle = '#294155'; ctx.lineWidth = 1; ctx.strokeRect(left, top, width - left - right, height - top - bottom);
+  ctx.fillStyle = '#8ba2b8'; ctx.font = '12px sans-serif'; ctx.fillText(maxY.toFixed(1), 4, top + 5); ctx.fillText(minY.toFixed(1), 4, height - bottom);
   for (const [key, , color] of visible) {
     ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 1.25;
     samples.forEach((sample, index) => {
@@ -3008,6 +3053,35 @@ function drawPidChart(canvas, samples, series) {
       if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     });
     ctx.stroke();
+  }
+  const hover = state.pidChartHover[chart.key];
+  if (hover && samples.length) {
+    const plotWidth = width - left - right;
+    const ratio = Math.max(0, Math.min(1, (hover.x - left) / Math.max(1, plotWidth)));
+    const targetUs = t0 + ratio * span;
+    let nearest = samples[0];
+    for (const sample of samples) {
+      if (Math.abs(sample.timeUs - targetUs) < Math.abs(nearest.timeUs - targetUs)) nearest = sample;
+    }
+    const pointX = left + ((nearest.timeUs - t0) / span) * plotWidth;
+    ctx.save();
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = '#64748b'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pointX, top); ctx.lineTo(pointX, height - bottom); ctx.stroke(); ctx.setLineDash([]);
+    const lines = [`时间  ${((nearest.timeUs - t0) / 1e6).toFixed(3)} s`, ...visible.map(([key, label]) => `${label}  ${Number(nearest[key]).toFixed(2)} ${chart.unit}`)];
+    ctx.font = '12px sans-serif';
+    const boxWidth = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 22;
+    const boxHeight = lines.length * 19 + 12;
+    const boxX = hover.x < width / 2 ? width - right - boxWidth - 8 : left + 8;
+    const boxY = hover.y < height / 2 ? height - bottom - boxHeight - 8 : top + 8;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.90)';
+    ctx.beginPath(); ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 7); ctx.fill();
+    lines.forEach((line, index) => { ctx.fillStyle = index ? visible[index - 1][2] : '#e2e8f0'; ctx.fillText(line, boxX + 11, boxY + 18 + index * 19); });
+    for (const [key, , color] of visible) {
+      const pointY = top + ((maxY - nearest[key]) / (maxY - minY)) * (height - top - bottom);
+      ctx.beginPath(); ctx.fillStyle = color; ctx.arc(pointX, pointY, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+    ctx.restore();
   }
 }
 
@@ -3028,58 +3102,75 @@ function updatePidLiveView(redraw = true) {
 }
 
 function drawPidCharts() {
-  const allModeSamples = state.pidLogSamples.filter((sample) => sample.mode === (state.pidLogMode === 'angle' ? 2 : 1));
-  let modeSamples = allModeSamples;
-  if (state.pidLiveWindowSeconds && allModeSamples.length) {
-    const firstUs = allModeSamples[0].timeUs;
-    const latestUs = allModeSamples[allModeSamples.length - 1].timeUs;
-    const windowUs = state.pidLiveWindowSeconds * 1e6;
-    const earliestEndUs = Math.min(latestUs, firstUs + windowUs);
-    if (state.pidLiveFollowLatest || state.pidLiveViewEndUs === null) state.pidLiveViewEndUs = latestUs;
-    state.pidLiveViewEndUs = Math.max(earliestEndUs, Math.min(latestUs, state.pidLiveViewEndUs));
-    modeSamples = allModeSamples.filter((sample) => sample.timeUs >= state.pidLiveViewEndUs - windowUs && sample.timeUs <= state.pidLiveViewEndUs);
-    const timeline = document.querySelector('#pid-live-timeline');
-    if (timeline) timeline.value = latestUs === earliestEndUs ? 1000 : Math.round((state.pidLiveViewEndUs - earliestEndUs) / (latestUs - earliestEndUs) * 1000);
-  }
+  const allModeSamples = pidSamplesForDisplay();
   const label = document.querySelector('#pid-window-label');
   if (label) label.textContent = state.pidLiveWindowSeconds ? `${state.pidLiveWindowSeconds.toFixed(2)} s` : '全部';
-  drawPidChart(document.querySelector('#pid-rate-chart'), modeSamples, pidRateSeries);
-  if (state.pidLogMode === 'angle') drawPidChart(document.querySelector('#pid-angle-chart'), modeSamples, pidAngleSeries);
+  for (const chart of pidChartDefinitions()) {
+    const view = pidChartView(chart.key);
+    let samples = allModeSamples;
+    let timelineValue = 1000;
+    if (state.pidLiveWindowSeconds && allModeSamples.length) {
+      const firstUs = allModeSamples[0].timeUs;
+      const latestUs = allModeSamples[allModeSamples.length - 1].timeUs;
+      const windowUs = state.pidLiveWindowSeconds * 1e6;
+      const earliestEndUs = Math.min(latestUs, firstUs + windowUs);
+      if (view.followLatest || view.endUs === null) view.endUs = latestUs;
+      view.endUs = Math.max(earliestEndUs, Math.min(latestUs, view.endUs));
+      samples = allModeSamples.filter((sample) => sample.timeUs >= view.endUs - windowUs && sample.timeUs <= view.endUs);
+      timelineValue = latestUs === earliestEndUs ? 1000 : Math.round((view.endUs - earliestEndUs) / (latestUs - earliestEndUs) * 1000);
+    }
+    const timeline = document.querySelector(`[data-pid-timeline="${chart.key}"]`);
+    if (timeline) { timeline.value = timelineValue; timeline.disabled = !state.pidLiveWindowSeconds || allModeSamples.length < 2; }
+    const latestButton = document.querySelector(`[data-pid-latest="${chart.key}"]`);
+    if (latestButton) latestButton.disabled = view.followLatest;
+    drawPidChart(document.querySelector(`[data-pid-chart="${chart.key}"]`), samples, chart);
+  }
 }
 
 function zoomPidTimeline(event) {
   if (!state.pidLogSamples.length) return;
   event.preventDefault();
-  const samples = state.pidLogSamples.filter((sample) => sample.mode === (state.pidLogMode === 'angle' ? 2 : 1));
+  const samples = pidSamplesForDisplay();
   if (samples.length < 2) return;
   const fullSeconds = Math.max(0.05, (samples[samples.length - 1].timeUs - samples[0].timeUs) / 1e6);
   const currentSeconds = state.pidLiveWindowSeconds || fullSeconds;
   const latestUs = samples[samples.length - 1].timeUs;
   const oldWindowUs = currentSeconds * 1e6;
-  const oldEndUs = state.pidLiveFollowLatest || state.pidLiveViewEndUs === null ? latestUs : state.pidLiveViewEndUs;
+  const key = event.currentTarget.dataset.pidChart;
+  const view = pidChartView(key);
+  const oldEndUs = view.followLatest || view.endUs === null ? latestUs : view.endUs;
   const rect = event.currentTarget.getBoundingClientRect();
   const anchor = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
   const anchorUs = oldEndUs - oldWindowUs + anchor * oldWindowUs;
   state.pidLiveWindowSeconds = Math.max(0.05, Math.min(fullSeconds, currentSeconds * Math.exp(event.deltaY * 0.001)));
   const newWindowUs = state.pidLiveWindowSeconds * 1e6;
   const earliestEndUs = Math.min(latestUs, samples[0].timeUs + newWindowUs);
-  state.pidLiveViewEndUs = Math.max(earliestEndUs, Math.min(latestUs, anchorUs + (1 - anchor) * newWindowUs));
-  state.pidLiveFollowLatest = Math.abs(state.pidLiveViewEndUs - latestUs) < 1;
-  const followButton = document.querySelector('#pid-follow-latest');
-  if (followButton) followButton.disabled = state.pidLiveFollowLatest;
+  view.endUs = Math.max(earliestEndUs, Math.min(latestUs, anchorUs + (1 - anchor) * newWindowUs));
+  view.followLatest = Math.abs(view.endUs - latestUs) < 1;
   drawPidCharts();
 }
 
-function seekPidTimeline(value) {
-  const samples = state.pidLogSamples.filter((sample) => sample.mode === (state.pidLogMode === 'angle' ? 2 : 1));
+function seekPidTimeline(key, value) {
+  const samples = pidSamplesForDisplay();
   if (!samples.length || !state.pidLiveWindowSeconds) return;
   const firstUs = samples[0].timeUs;
   const latestUs = samples[samples.length - 1].timeUs;
   const earliestEndUs = Math.min(latestUs, firstUs + state.pidLiveWindowSeconds * 1e6);
-  state.pidLiveViewEndUs = earliestEndUs + (latestUs - earliestEndUs) * Number(value) / 1000;
-  state.pidLiveFollowLatest = Number(value) >= 1000;
-  const followButton = document.querySelector('#pid-follow-latest');
-  if (followButton) followButton.disabled = state.pidLiveFollowLatest;
+  const view = pidChartView(key);
+  view.endUs = earliestEndUs + (latestUs - earliestEndUs) * Number(value) / 1000;
+  view.followLatest = Number(value) >= 1000;
+  drawPidCharts();
+}
+
+function hoverPidChart(event) {
+  const key = event.currentTarget.dataset.pidChart;
+  const rect = event.currentTarget.getBoundingClientRect();
+  state.pidChartHover[key] = {x: event.clientX - rect.left, y: event.clientY - rect.top};
+  drawPidCharts();
+}
+
+function leavePidChart(event) {
+  delete state.pidChartHover[event.currentTarget.dataset.pidChart];
   drawPidCharts();
 }
 
@@ -3122,8 +3213,8 @@ async function stopPidLive() {
 
 function clearPidLive() {
   state.pidLogSamples = []; state.pidLivePackets = 0; state.pidLiveLost = 0; state.pidLiveDuplicates = 0;
-  state.pidLiveLastSequence = null; state.pidLiveRateHz = 0; state.pidLiveViewEndUs = null;
-  state.pidLiveFollowLatest = true; pidLiveRateWindow = []; render();
+  state.pidLiveLastSequence = null; state.pidLiveRateHz = 0; state.pidChartViews = {}; state.pidChartHover = {};
+  pidLiveRateWindow = []; render();
 }
 
 function savePidLive() {
@@ -3265,30 +3356,40 @@ function imuVector(value) {
 
 function formatImuVector(value, unit) {
   const vector = imuVector(value);
-  return vector.map((number, index) => `<div class="metric"><span>${['X', 'Y', 'Z'][index]}</span><strong>${Number.isFinite(number) ? number.toFixed(4) : '—'} ${unit}</strong></div>`).join('');
+  return vector.map((number, index) => `<div class="imu-axis imu-axis-${['x', 'y', 'z'][index]}"><span class="imu-axis-name">${['X', 'Y', 'Z'][index]}</span><strong>${Number.isFinite(number) ? number.toFixed(3) : '—'}</strong><small>${unit}</small></div>`).join('');
 }
 
-function renderImu() {
+function renderImuCalibration() {
   const sample = state.imuSample?.imu || {};
   const cal = state.imuCalibration;
-  const faces = [['xp', '+X'], ['xn', '-X'], ['yp', '+Y'], ['yn', '-Y'], ['zp', '+Z'], ['zn', '-Z']];
-  return `<div class="grid imu-grid">
-    <section class="panel"><h2>IMU实时数据</h2><div class="helper">显示传感器驱动解析后的物理量；这些是校准前数据。</div>
-      <h3>陀螺仪</h3><div class="metrics" id="imu-gyro-live">${formatImuVector(sample['gyro-dps'], '°/s')}</div>
-      <h3>加速度计</h3><div class="metrics" id="imu-accel-live">${formatImuVector(sample['accel-mps2'], 'm/s²')}</div>
-    </section>
-    <section class="panel"><h2>加速度计六面校准</h2><div class="helper">依次让标注轴垂直向上并保持静止。采样只暂存在配置器，点击页面底部“保存”后才写入接收机。</div>
-      <div class="actions imu-face-actions">${faces.map(([id,label]) => `<button class="secondary" type="button" data-imu-face="${id}">${label} ${cal.faces[id] ? '✓' : ''}</button>`).join('')}</div>
-      <div class="metric"><span>Bias X/Y/Z</span><strong>${cal.accelBias.map((v) => Number(v).toFixed(5)).join(' / ')}</strong></div>
-      <div class="metric"><span>Scale X/Y/Z</span><strong>${cal.accelScale.map((v) => Number(v).toFixed(6)).join(' / ')}</strong></div>
-    </section>
-    <section class="panel"><h2>陀螺仪校准</h2><div class="helper">保持设备完全静止，配置器采集并求三轴平均零偏。</div>
-      <div class="metric"><span>Bias X/Y/Z</span><strong>${cal.gyroBias.map((v) => Number(v).toFixed(5)).join(' / ')} °/s</strong></div>
-      <div class="actions"><button class="secondary" type="button" data-action="imu-gyro-calibrate" ${state.busy ? 'disabled' : ''}>开始陀螺仪校准</button></div>
-    </section>
-    <section class="panel"><h2>保存校准参数</h2><div class="notice">${escapeHtml(cal.status || '尚未保存的校准结果不会写入接收机。')}</div>
-      <form id="imu-form"><div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>保存</button><button class="secondary" type="button" data-action="imu-reset">恢复默认值</button></div></form>
-    </section>
+  const faces = [['xp', 'X 轴朝上'], ['xn', 'X 轴朝下'], ['yp', 'Y 轴朝上'], ['yn', 'Y 轴朝下'], ['zp', 'Z 轴朝上'], ['zn', 'Z 轴朝下']];
+  const completed = faces.filter(([id]) => cal.faces[id]).length;
+  const accelBusy = cal.active === 'accel';
+  const gyroBusy = cal.active === 'gyro';
+  return `<div class="imu-calibration-section">
+    <div class="imu-live-card">
+      <div class="imu-card-heading"><div><h3>IMU 实时数据</h3><p>传感器当前输出的校准前物理量</p></div><span class="imu-live-dot">实时</span></div>
+      <div class="imu-live-groups">
+        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>陀螺仪</span><small>角速度</small></div><div class="imu-axis-grid" id="imu-gyro-live">${formatImuVector(sample['gyro-dps'], '°/s')}</div></div>
+        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>加速度计</span><small>线加速度</small></div><div class="imu-axis-grid" id="imu-accel-live">${formatImuVector(sample['accel-mps2'], 'm/s²')}</div></div>
+      </div>
+    </div>
+    <div class="imu-calibration-grid">
+      <section class="imu-cal-card ${accelBusy ? 'is-calibrating' : ''}">
+        <div class="imu-card-heading"><div><h3>加速度计六面校准</h3><p>请严格按顺序摆放设备，每次保持静止后采集</p></div><span class="cal-progress">${completed}/6</span></div>
+        <div class="imu-step-hint">${completed < 6 ? `下一步：将设备的 ${faces[completed][1]}，静置后按下对应按钮。` : '六个面已全部采集，请确认并保存以计算校准参数。'}</div>
+        <div class="imu-face-actions">${faces.map(([id,label], index) => `<button class="imu-face-button ${cal.faces[id] ? 'is-done' : ''} ${index === completed ? 'is-next' : ''}" type="button" data-imu-face="${id}" ${state.busy || (completed < 6 && index !== completed) ? 'disabled' : ''}><span>${index + 1}</span><strong>${label}</strong><small>${completed === 6 ? '已采集 · 可重新采集' : cal.faces[id] ? '已采集 ✓' : index === completed ? '点击采集' : '等待前一步'}</small></button>`).join('')}</div>
+        <div class="actions"><button class="primary" type="button" data-action="imu-accel-save" ${state.busy || completed !== 6 ? 'disabled' : ''}>计算并保存加速度计校准</button></div>
+        ${accelBusy ? '<div class="calibrating-overlay"><span></span>正在采样，请保持当前姿态静止…</div>' : ''}
+      </section>
+      <section class="imu-cal-card ${gyroBusy ? 'is-calibrating' : ''}">
+        <div class="imu-card-heading"><div><h3>陀螺仪校准</h3><p>${gyroBusy ? '请勿触碰设备，保持完全静止，正在采集零偏…' : cal.gyroSample ? '采样已经完成，请按下“确认并保存陀螺仪校准”按钮。' : '将设备放在稳定平面上，校准过程中保持完全静止'}</p></div>${cal.gyroSample ? '<span class="cal-ready">待确认</span>' : ''}</div>
+        <div class="gyro-still-visual"><span class="gyro-icon">◎</span><strong>${gyroBusy ? '保持静置' : cal.gyroSample ? '采样完成' : '准备校准'}</strong><small>${gyroBusy ? '采样结束前请勿移动设备' : cal.gyroSample ? '结果仅暂存在配置器中' : '点击下方按钮开始采样'}</small></div>
+        <div class="actions"><button class="secondary" type="button" data-action="imu-gyro-calibrate" ${state.busy ? 'disabled' : ''}>${cal.gyroSample ? '重新采集陀螺仪' : '开始陀螺仪校准'}</button><button class="primary" type="button" data-action="imu-gyro-save" ${state.busy || !cal.gyroSample ? 'disabled' : ''}>确认并保存陀螺仪校准</button></div>
+        ${gyroBusy ? '<div class="calibrating-overlay"><span></span>正在校准，请保持设备静置…</div>' : ''}
+      </section>
+    </div>
+    ${cal.status ? `<div class="notice imu-cal-status">${escapeHtml(cal.status)}</div>` : ''}
   </div>`;
 }
 
@@ -3306,47 +3407,63 @@ async function readImuAverage(sampleCount = 30, intervalMs = 50) {
 }
 
 async function calibrateGyro() {
+  state.imuCalibration.active = 'gyro';
+  state.imuCalibration.status = '陀螺仪正在采样，请保持设备完全静止。';
   await runBusy(async () => {
-    state.imuCalibration.status = '正在采样，请保持设备静止…';
     const result = await readImuAverage(50, 50);
-    state.imuCalibration.gyroBias = result.gyro;
-    state.imuCalibration.status = '陀螺仪校准已暂存，请点击保存写入接收机。';
+    state.imuCalibration.gyroSample = result.gyro;
+    state.imuCalibration.status = '陀螺仪采样完成，尚未修改零偏；请确认并保存。';
   });
+  state.imuCalibration.active = '';
+  render();
 }
 
 async function captureAccelFace(face) {
+  state.imuCalibration.active = 'accel';
   await runBusy(async () => {
     const result = await readImuAverage(30, 50);
     state.imuCalibration.faces[face] = result.accel;
     const f = state.imuCalibration.faces;
-    if (['xp','xn','yp','yn','zp','zn'].every((key) => f[key])) {
-      const gravity = 9.80665;
-      const pairs = [[f.xp[0], f.xn[0]], [f.yp[1], f.yn[1]], [f.zp[2], f.zn[2]]];
-      state.imuCalibration.accelBias = pairs.map(([positive, negative]) => (positive + negative) / 2);
-      state.imuCalibration.accelScale = pairs.map(([positive, negative]) => 2 * gravity / Math.abs(positive - negative));
-      if (state.imuCalibration.accelScale.some((v) => !Number.isFinite(v) || v < 0.5 || v > 1.5)) throw new Error('六面数据无效，请确认每个轴的正反方向均正确采集');
-      state.imuCalibration.status = '加速度计六面校准已暂存，请点击保存写入接收机。';
-    } else state.imuCalibration.status = `已采集 ${Object.keys(f).length}/6 个面。`;
+    const count = Object.keys(f).length;
+    state.imuCalibration.status = count === 6 ? '六面原始数据已暂存，尚未计算或修改校准参数；请确认并保存。' : `已采集 ${count}/6 个面，请继续下一步。`;
   });
+  state.imuCalibration.active = '';
+  render();
 }
 
-async function saveImu(event) {
-  event.preventDefault();
+async function saveAccelCalibration() {
   await runBusy(async () => {
-    const next = {...config(), fc_gyro_bias: state.imuCalibration.gyroBias, fc_accel_bias: state.imuCalibration.accelBias, fc_accel_scale: state.imuCalibration.accelScale};
+    const f = state.imuCalibration.faces;
+    if (!['xp','xn','yp','yn','zp','zn'].every((key) => f[key])) throw new Error('请先依次完成六个面的采集');
+    const gravity = 9.80665;
+    const pairs = [[f.xp[0], f.xn[0]], [f.yp[1], f.yn[1]], [f.zp[2], f.zn[2]]];
+    const accelBias = pairs.map(([positive, negative]) => (positive + negative) / 2);
+    const accelScale = pairs.map(([positive, negative]) => 2 * gravity / Math.abs(positive - negative));
+    if (accelScale.some((v) => !Number.isFinite(v) || v < 0.5 || v > 1.5)) throw new Error('六面数据无效，请确认每个轴的正反方向均正确采集');
+    const next = {...config(), fc_accel_bias: accelBias, fc_accel_scale: accelScale};
     delete next.pwm;
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(next)});
     await loadDevice();
-  }, 'IMU校准参数已保存');
+  }, '加速度计六面校准已计算并保存');
+}
+
+async function saveGyroCalibration() {
+  await runBusy(async () => {
+    if (!state.imuCalibration.gyroSample) throw new Error('请先完成陀螺仪采样');
+    const next = {...config(), fc_gyro_bias: state.imuCalibration.gyroSample};
+    delete next.pwm;
+    await apiFetch('/config', {method: 'POST', body: JSON.stringify(next)});
+    await loadDevice();
+  }, '陀螺仪校准已确认并保存');
 }
 
 async function pollImuOnce() {
-  if (state.tab !== 'imu') return;
+  if (state.tab !== 'flight') return;
   try { state.imuSample = await apiFetch('/status.json', {timeout: 2000}); } catch (_) { /* keep last sample */ }
   const gyro = document.querySelector('#imu-gyro-live'); const accel = document.querySelector('#imu-accel-live');
   if (gyro) gyro.innerHTML = formatImuVector(state.imuSample?.imu?.['gyro-dps'], '°/s');
   if (accel) accel.innerHTML = formatImuVector(state.imuSample?.imu?.['accel-mps2'], 'm/s²');
-  if (state.tab === 'imu') imuPollTimer = window.setTimeout(pollImuOnce, 200);
+  if (state.tab === 'flight') imuPollTimer = window.setTimeout(pollImuOnce, 200);
 }
 
 function renderCurrentTab() {
@@ -3356,7 +3473,6 @@ function renderCurrentTab() {
     model: renderModel,
     pwm: renderPwm,
     flight: renderFlight,
-    imu: renderImu,
     debug: renderDebug,
     hardware: renderHardwareJson,
     wifi: renderWifi,
@@ -3643,15 +3759,18 @@ async function stopDebugPolling(disconnect = true) {
 }
 
 function render() {
+  const connectionState = connectionStatusDisplay();
   document.querySelector('#app').innerHTML = `
     <div class="app">
+      <a class="skip-link" href="#main-content">${getLocale() === 'zh-CN' ? '跳到主要内容' : 'Skip to main content'}</a>
       <header class="topbar">
-        <div class="brand"><h1>${t('app.title')}</h1></div>
+        <div class="brand"><h1>${t('app.title')}</h1><span>FLIGHT CONTROL · TELEMETRY CONSOLE</span></div>
         <select class="lang-switch" aria-label="${t('lang.label')}">
           <option value="zh-CN" ${selected(getLocale(), 'zh-CN')}>${t('lang.chinese')}</option>
           <option value="en" ${selected(getLocale(), 'en')}>${t('lang.english')}</option>
         </select>
         <form class="connection" id="connect-form">
+          <div class="connection-state is-${state.connectionStatus}" title="${escapeHtml(connectionState.detail)}"><span></span><strong>${escapeHtml(connectionState.label)}</strong>${connectionState.detail ? `<small>${escapeHtml(connectionState.detail)}</small>` : ''}</div>
           <input name="api" value="${escapeHtml(apiBaseHost())}" aria-label="API base URL">
           <button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.connect')}</button>
           <button class="secondary" type="button" data-action="refresh" ${state.busy ? 'disabled' : ''}>${t('action.refresh')}</button>
@@ -3664,7 +3783,7 @@ function render() {
       </div>
       <div class="shell">
         <nav class="nav">${tabs.map(([id, getLabel]) => `<button type="button" data-tab="${id}" class="${state.tab === id ? 'active' : ''}">${getLabel()}</button>`).join('')}</nav>
-        <main class="content">
+        <main class="content" id="main-content" tabindex="-1">
           ${state.message ? `<div class="message ${state.message.type}">${escapeHtml(state.message.text)}</div>` : ''}
           ${state.busy ? `<div class="notice">${t('notice.working')}</div>` : ''}
           ${renderCurrentTab()}
@@ -3696,7 +3815,7 @@ function wireEvents() {
     event.preventDefault();
     state.apiBase = normalizeApiBase(new FormData(event.currentTarget).get('api'));
     localStorage.setItem(API_STORAGE_KEY, state.apiBase);
-    runBusy(loadDevice, t('message.connected'));
+    void connectDevice(t('message.connected'));
   });
 
   document.querySelectorAll('[data-tab]').forEach((button) => {
@@ -3711,6 +3830,7 @@ function wireEvents() {
   document.querySelectorAll('[data-pid-mode]').forEach((button) => {
     button.addEventListener('click', () => {
       state.pidLogMode = button.dataset.pidMode;
+      state.pidChartHover = {};
       render();
     });
   });
@@ -3721,19 +3841,29 @@ function wireEvents() {
     });
   });
   document.querySelector('#pid-live-window')?.addEventListener('change', (event) => {
-    state.pidLiveWindowSeconds = Number(event.target.value); state.pidLiveFollowLatest = true; drawPidCharts();
+    state.pidLiveWindowSeconds = Number(event.target.value);
+    Object.values(state.pidChartViews).forEach((view) => { view.followLatest = true; view.endUs = null; });
+    drawPidCharts();
   });
-  document.querySelectorAll('.pid-chart-block canvas').forEach((canvas) => canvas.addEventListener('wheel', zoomPidTimeline, {passive: false}));
-  document.querySelector('#pid-live-timeline')?.addEventListener('input', (event) => seekPidTimeline(event.target.value));
-  document.querySelector('#pid-follow-latest')?.addEventListener('click', () => {
-    state.pidLiveFollowLatest = true; state.pidLiveViewEndUs = null; render();
+  document.querySelectorAll('[data-pid-chart]').forEach((canvas) => {
+    canvas.addEventListener('wheel', zoomPidTimeline, {passive: false});
+    canvas.addEventListener('pointermove', hoverPidChart);
+    canvas.addEventListener('pointerleave', leavePidChart);
+  });
+  document.querySelectorAll('[data-pid-timeline]').forEach((timeline) => {
+    timeline.addEventListener('input', () => seekPidTimeline(timeline.dataset.pidTimeline, timeline.value));
+  });
+  document.querySelectorAll('[data-pid-latest]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const view = pidChartView(button.dataset.pidLatest);
+      view.followLatest = true; view.endUs = null; drawPidCharts();
+    });
   });
 
   document.querySelector('#runtime-form')?.addEventListener('submit', saveRuntime);
   document.querySelector('#model-form')?.addEventListener('submit', saveModel);
   document.querySelector('#pwm-form')?.addEventListener('submit', savePwm);
   document.querySelector('#flight-form')?.addEventListener('submit', saveFlight);
-  document.querySelector('#imu-form')?.addEventListener('submit', saveImu);
   document.querySelector('#hardware-form')?.addEventListener('submit', saveHardwareJson);
   document.querySelector('#wifi-form')?.addEventListener('submit', saveHomeNetwork);
   document.querySelector('#update-form')?.addEventListener('submit', uploadFirmware);
@@ -3809,7 +3939,7 @@ function wireEvents() {
   wirePwmForm();
   initDebugAircraftView();
   drawPidCharts();
-  if (state.tab === 'imu' && !imuPollTimer) void pollImuOnce();
+  if (state.tab === 'flight' && !imuPollTimer) void pollImuOnce();
 
   document.querySelectorAll('[data-imu-face]').forEach((button) => {
     button.addEventListener('click', () => void captureAccelFace(button.dataset.imuFace));
@@ -3818,7 +3948,7 @@ function wireEvents() {
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => {
       const action = button.dataset.action;
-      if (action === 'refresh') runBusy(loadDevice, t('message.refreshed'));
+      if (action === 'refresh') void connectDevice(t('message.refreshed'));
       if (action === 'reboot') postPlain('/reboot', t('message.rebootRequested'));
       if (action === 'reset-model') postPlain('/reset?model', t('message.modelReset'));
       if (action === 'reset-hardware') postPlain('/reset?hardware', t('message.hardwareReset'));
@@ -3830,10 +3960,8 @@ function wireEvents() {
       if (action === 'remove-motor') changeMixerRowCount(-1);
       if (action === 'quick-orientation') quickOrientationStep();
       if (action === 'imu-gyro-calibrate') void calibrateGyro();
-      if (action === 'imu-reset') {
-        state.imuCalibration = {gyroBias: [0,0,0], accelBias: [0,0,0], accelScale: [1,1,1], faces: {}, status: '默认值已暂存，请点击保存写入接收机。'};
-        render();
-      }
+      if (action === 'imu-accel-save') void saveAccelCalibration();
+      if (action === 'imu-gyro-save') void saveGyroCalibration();
       if (action === 'debug-start') startDebugPolling();
       if (action === 'debug-stop') stopDebugPolling();
       if (action === 'pidlive-start') void startPidLive();
@@ -3969,7 +4097,7 @@ window.addEventListener('beforeunload', (event) => {
 render();
 async function initializeApp() {
   await restoreDownloadedFirmware();
-  await runBusy(loadDevice, t('message.connected'));
+  await connectDevice(t('message.connected'));
   if (isTauriApp()) checkAppUpdate();
 }
 initializeApp();
