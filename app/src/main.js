@@ -68,6 +68,8 @@ const state = {
   eulerPitch: 0,
   eulerYaw: 0,
   orientationCal: null,
+  imuSample: null,
+  imuCalibration: {gyroBias: [0, 0, 0], accelBias: [0, 0, 0], accelScale: [1, 1, 1], faces: {}, status: ''},
   debugSample: null,
   debugError: '',
   debugPolling: false,
@@ -115,6 +117,7 @@ const state = {
 };
 
 let debugPollTimer = null;
+let imuPollTimer = null;
 let debugPollInFlight = false;
 let debugPollGeneration = 0;
 let debugAircraftView = null;
@@ -132,7 +135,7 @@ const tabs = [
   ['model', () => t('tab.model')],
   ['pwm', () => t('tab.pwm')],
   ['flight', () => t('tab.flight')],
-  ['pidlog', () => t('tab.pidlog')],
+  ['imu', () => getLocale() === 'zh-CN' ? 'IMU校准' : 'IMU Calibration'],
   ['debug', () => t('tab.debug')],
   ['hardware', () => t('tab.hardware')],
   ['wifi', () => t('tab.wifi')],
@@ -781,6 +784,12 @@ async function loadDevice() {
   state.extraMixerRows = 0;
   state.originalUid = bytesToList(configResponse?.config?.uid);
   state.originalUidType = configResponse?.config?.uidtype || '';
+  state.imuCalibration = {
+    gyroBias: [...(configResponse?.config?.fc_gyro_bias || [0, 0, 0])],
+    accelBias: [...(configResponse?.config?.fc_accel_bias || [0, 0, 0])],
+    accelScale: [...(configResponse?.config?.fc_accel_scale || [1, 1, 1])],
+    faces: {}, status: '',
+  };
   if (state.profileOriginal) {
     try {
       const {draft} = validateProfile(state.profileOriginal, {deviceAware: true});
@@ -2286,7 +2295,7 @@ function renderCommunitySubmission() {
 function renderStatus() {
   const c = config();
   const h = hardware();
-  return `
+  return `<div class="debug-page">
     <div class="grid">
       <section class="panel">
         <h2>${t('status.device')}</h2>
@@ -2799,7 +2808,9 @@ function renderDebug() {
           <canvas id="debug-aircraft-canvas" aria-label="${t('debug.canvasLabel')}"></canvas>
         </div>
       </section>
-    </div>`;
+    </div>
+    ${renderPidLog()}
+  </div>`;
 }
 
 const PID_LOG_MAGIC = 0x474c5253;
@@ -2948,7 +2959,7 @@ function renderPidLog() {
       <div class="panel-heading"><div><h2>PID 波形</h2><div class="helper">监听 UDP 14580；曲线按实际收到的数据点连接，不补点、不插值。</div></div></div>
       <div class="actions"><button class="primary" type="button" data-action="pidlive-${state.pidLiveReceiving ? 'stop' : 'start'}">${state.pidLiveReceiving ? '暂停接收' : '开始接收'}</button><button class="secondary" type="button" data-action="pidlive-clear">清空当前数据</button><button class="secondary" type="button" data-action="pidlive-save" ${state.pidLogSamples.length ? '' : 'disabled'}>保存原始数据</button></div>
       ${state.pidLogError ? `<div class="message error">${escapeHtml(state.pidLogError)}</div>` : ''}
-      <div class="metrics"><div class="metric"><span>接收频率</span><strong>${state.pidLiveRateHz.toFixed(1)} Hz</strong></div><div class="metric"><span>数据点</span><strong>${state.pidLivePackets.toLocaleString()}</strong></div><div class="metric"><span>UDP 丢包</span><strong>${state.pidLiveLost.toLocaleString()}</strong></div><div class="metric"><span>重复包</span><strong>${state.pidLiveDuplicates.toLocaleString()}</strong></div></div>
+      <div class="metrics"><div class="metric"><span>接收频率</span><strong id="pid-live-rate">${state.pidLiveRateHz.toFixed(1)} Hz</strong></div><div class="metric"><span>数据点</span><strong id="pid-live-packets">${state.pidLivePackets.toLocaleString()}</strong></div><div class="metric"><span>UDP 丢包</span><strong id="pid-live-lost">${state.pidLiveLost.toLocaleString()}</strong></div><div class="metric"><span>重复包</span><strong id="pid-live-duplicates">${state.pidLiveDuplicates.toLocaleString()}</strong></div></div>
       <div class="pid-time-controls">
         <label>显示时间窗口 <select id="pid-live-window">${![0, 5, 10, 30].includes(state.pidLiveWindowSeconds) ? `<option value="${state.pidLiveWindowSeconds}" selected>${state.pidLiveWindowSeconds.toFixed(2)} s</option>` : ''}<option value="5" ${state.pidLiveWindowSeconds === 5 ? 'selected' : ''}>5 s</option><option value="10" ${state.pidLiveWindowSeconds === 10 ? 'selected' : ''}>10 s</option><option value="30" ${state.pidLiveWindowSeconds === 30 ? 'selected' : ''}>30 s</option><option value="0" ${state.pidLiveWindowSeconds === 0 ? 'selected' : ''}>全部</option></select></label>
         <span id="pid-window-label">${state.pidLiveWindowSeconds ? `${state.pidLiveWindowSeconds.toFixed(2)} s` : '全部'}</span>
@@ -2967,7 +2978,7 @@ function renderPidLog() {
 }
 
 function drawPidChart(canvas, samples, series) {
-  if (!canvas || samples.length < 2) return;
+  if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
   const width = Math.max(320, canvas.clientWidth);
   const height = Math.max(240, canvas.clientHeight);
@@ -2975,6 +2986,11 @@ function drawPidChart(canvas, samples, series) {
   const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr);
   const visible = series.filter(([key]) => state.pidLogVisible[key] !== false);
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, width, height);
+  if (samples.length < 2) {
+    ctx.fillStyle = '#94a3b8'; ctx.font = '13px sans-serif';
+    ctx.fillText(state.pidLogMode === 'angle' ? '等待 ANGLE 模式数据…' : '等待 RATE 模式数据…', 18, 30);
+    return;
+  }
   if (!visible.length) return;
   let minY = Infinity; let maxY = -Infinity;
   for (const sample of samples) for (const [key] of visible) { minY = Math.min(minY, sample[key]); maxY = Math.max(maxY, sample[key]); }
@@ -2993,6 +3009,22 @@ function drawPidChart(canvas, samples, series) {
     });
     ctx.stroke();
   }
+}
+
+function updatePidLiveView(redraw = true) {
+  const values = {
+    'pid-live-rate': `${state.pidLiveRateHz.toFixed(1)} Hz`,
+    'pid-live-packets': state.pidLivePackets.toLocaleString(),
+    'pid-live-lost': state.pidLiveLost.toLocaleString(),
+    'pid-live-duplicates': state.pidLiveDuplicates.toLocaleString(),
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const element = document.getElementById(id);
+    if (element) element.textContent = value;
+  });
+  const saveButton = document.querySelector('[data-action="pidlive-save"]');
+  if (saveButton) saveButton.disabled = state.pidLogSamples.length === 0;
+  if (redraw) drawPidCharts();
 }
 
 function drawPidCharts() {
@@ -3069,7 +3101,8 @@ async function pollPidLive() {
     }
     pidLiveRateWindow = pidLiveRateWindow.filter((time) => now - time <= 1000);
     state.pidLiveRateHz = pidLiveRateWindow.length;
-    if (samples.length) { render(); pidLiveTimer = window.setTimeout(pollPidLive, 20); return; }
+    updatePidLiveView(samples.length > 0);
+    if (samples.length) { pidLiveTimer = window.setTimeout(pollPidLive, 20); return; }
   } catch (error) { state.pidLogError = error.message || String(error); await stopPidLive(); render(); return; }
   pidLiveTimer = window.setTimeout(pollPidLive, 20);
 }
@@ -3226,6 +3259,96 @@ function renderUpdate() {
     </div>`;
 }
 
+function imuVector(value) {
+  return ['x', 'y', 'z'].map((axis) => Number(value?.[axis]));
+}
+
+function formatImuVector(value, unit) {
+  const vector = imuVector(value);
+  return vector.map((number, index) => `<div class="metric"><span>${['X', 'Y', 'Z'][index]}</span><strong>${Number.isFinite(number) ? number.toFixed(4) : '—'} ${unit}</strong></div>`).join('');
+}
+
+function renderImu() {
+  const sample = state.imuSample?.imu || {};
+  const cal = state.imuCalibration;
+  const faces = [['xp', '+X'], ['xn', '-X'], ['yp', '+Y'], ['yn', '-Y'], ['zp', '+Z'], ['zn', '-Z']];
+  return `<div class="grid imu-grid">
+    <section class="panel"><h2>IMU实时数据</h2><div class="helper">显示传感器驱动解析后的物理量；这些是校准前数据。</div>
+      <h3>陀螺仪</h3><div class="metrics" id="imu-gyro-live">${formatImuVector(sample['gyro-dps'], '°/s')}</div>
+      <h3>加速度计</h3><div class="metrics" id="imu-accel-live">${formatImuVector(sample['accel-mps2'], 'm/s²')}</div>
+    </section>
+    <section class="panel"><h2>加速度计六面校准</h2><div class="helper">依次让标注轴垂直向上并保持静止。采样只暂存在配置器，点击页面底部“保存”后才写入接收机。</div>
+      <div class="actions imu-face-actions">${faces.map(([id,label]) => `<button class="secondary" type="button" data-imu-face="${id}">${label} ${cal.faces[id] ? '✓' : ''}</button>`).join('')}</div>
+      <div class="metric"><span>Bias X/Y/Z</span><strong>${cal.accelBias.map((v) => Number(v).toFixed(5)).join(' / ')}</strong></div>
+      <div class="metric"><span>Scale X/Y/Z</span><strong>${cal.accelScale.map((v) => Number(v).toFixed(6)).join(' / ')}</strong></div>
+    </section>
+    <section class="panel"><h2>陀螺仪校准</h2><div class="helper">保持设备完全静止，配置器采集并求三轴平均零偏。</div>
+      <div class="metric"><span>Bias X/Y/Z</span><strong>${cal.gyroBias.map((v) => Number(v).toFixed(5)).join(' / ')} °/s</strong></div>
+      <div class="actions"><button class="secondary" type="button" data-action="imu-gyro-calibrate" ${state.busy ? 'disabled' : ''}>开始陀螺仪校准</button></div>
+    </section>
+    <section class="panel"><h2>保存校准参数</h2><div class="notice">${escapeHtml(cal.status || '尚未保存的校准结果不会写入接收机。')}</div>
+      <form id="imu-form"><div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>保存</button><button class="secondary" type="button" data-action="imu-reset">恢复默认值</button></div></form>
+    </section>
+  </div>`;
+}
+
+async function readImuAverage(sampleCount = 30, intervalMs = 50) {
+  const gyro = [0, 0, 0]; const accel = [0, 0, 0];
+  for (let count = 0; count < sampleCount; count += 1) {
+    const status = await apiFetch('/status.json', {timeout: 2000});
+    const imu = status?.imu;
+    const g = imuVector(imu?.['gyro-dps']); const a = imuVector(imu?.['accel-mps2']);
+    if (!imu?.['accel-valid'] || [...g, ...a].some((v) => !Number.isFinite(v))) throw new Error('IMU数据无效');
+    g.forEach((v, i) => { gyro[i] += v; }); a.forEach((v, i) => { accel[i] += v; });
+    await sleep(intervalMs);
+  }
+  return {gyro: gyro.map((v) => v / sampleCount), accel: accel.map((v) => v / sampleCount)};
+}
+
+async function calibrateGyro() {
+  await runBusy(async () => {
+    state.imuCalibration.status = '正在采样，请保持设备静止…';
+    const result = await readImuAverage(50, 50);
+    state.imuCalibration.gyroBias = result.gyro;
+    state.imuCalibration.status = '陀螺仪校准已暂存，请点击保存写入接收机。';
+  });
+}
+
+async function captureAccelFace(face) {
+  await runBusy(async () => {
+    const result = await readImuAverage(30, 50);
+    state.imuCalibration.faces[face] = result.accel;
+    const f = state.imuCalibration.faces;
+    if (['xp','xn','yp','yn','zp','zn'].every((key) => f[key])) {
+      const gravity = 9.80665;
+      const pairs = [[f.xp[0], f.xn[0]], [f.yp[1], f.yn[1]], [f.zp[2], f.zn[2]]];
+      state.imuCalibration.accelBias = pairs.map(([positive, negative]) => (positive + negative) / 2);
+      state.imuCalibration.accelScale = pairs.map(([positive, negative]) => 2 * gravity / Math.abs(positive - negative));
+      if (state.imuCalibration.accelScale.some((v) => !Number.isFinite(v) || v < 0.5 || v > 1.5)) throw new Error('六面数据无效，请确认每个轴的正反方向均正确采集');
+      state.imuCalibration.status = '加速度计六面校准已暂存，请点击保存写入接收机。';
+    } else state.imuCalibration.status = `已采集 ${Object.keys(f).length}/6 个面。`;
+  });
+}
+
+async function saveImu(event) {
+  event.preventDefault();
+  await runBusy(async () => {
+    const next = {...config(), fc_gyro_bias: state.imuCalibration.gyroBias, fc_accel_bias: state.imuCalibration.accelBias, fc_accel_scale: state.imuCalibration.accelScale};
+    delete next.pwm;
+    await apiFetch('/config', {method: 'POST', body: JSON.stringify(next)});
+    await loadDevice();
+  }, 'IMU校准参数已保存');
+}
+
+async function pollImuOnce() {
+  if (state.tab !== 'imu') return;
+  try { state.imuSample = await apiFetch('/status.json', {timeout: 2000}); } catch (_) { /* keep last sample */ }
+  const gyro = document.querySelector('#imu-gyro-live'); const accel = document.querySelector('#imu-accel-live');
+  if (gyro) gyro.innerHTML = formatImuVector(state.imuSample?.imu?.['gyro-dps'], '°/s');
+  if (accel) accel.innerHTML = formatImuVector(state.imuSample?.imu?.['accel-mps2'], 'm/s²');
+  if (state.tab === 'imu') imuPollTimer = window.setTimeout(pollImuOnce, 200);
+}
+
 function renderCurrentTab() {
   return {
     status: renderStatus,
@@ -3233,7 +3356,7 @@ function renderCurrentTab() {
     model: renderModel,
     pwm: renderPwm,
     flight: renderFlight,
-    pidlog: renderPidLog,
+    imu: renderImu,
     debug: renderDebug,
     hardware: renderHardwareJson,
     wifi: renderWifi,
@@ -3578,6 +3701,7 @@ function wireEvents() {
 
   document.querySelectorAll('[data-tab]').forEach((button) => {
     button.addEventListener('click', () => {
+      if (imuPollTimer) { window.clearTimeout(imuPollTimer); imuPollTimer = null; }
       state.tab = button.dataset.tab;
       state.message = null;
       render();
@@ -3609,6 +3733,7 @@ function wireEvents() {
   document.querySelector('#model-form')?.addEventListener('submit', saveModel);
   document.querySelector('#pwm-form')?.addEventListener('submit', savePwm);
   document.querySelector('#flight-form')?.addEventListener('submit', saveFlight);
+  document.querySelector('#imu-form')?.addEventListener('submit', saveImu);
   document.querySelector('#hardware-form')?.addEventListener('submit', saveHardwareJson);
   document.querySelector('#wifi-form')?.addEventListener('submit', saveHomeNetwork);
   document.querySelector('#update-form')?.addEventListener('submit', uploadFirmware);
@@ -3684,6 +3809,11 @@ function wireEvents() {
   wirePwmForm();
   initDebugAircraftView();
   drawPidCharts();
+  if (state.tab === 'imu' && !imuPollTimer) void pollImuOnce();
+
+  document.querySelectorAll('[data-imu-face]').forEach((button) => {
+    button.addEventListener('click', () => void captureAccelFace(button.dataset.imuFace));
+  });
 
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -3699,6 +3829,11 @@ function wireEvents() {
       if (action === 'add-motor') changeMixerRowCount(1);
       if (action === 'remove-motor') changeMixerRowCount(-1);
       if (action === 'quick-orientation') quickOrientationStep();
+      if (action === 'imu-gyro-calibrate') void calibrateGyro();
+      if (action === 'imu-reset') {
+        state.imuCalibration = {gyroBias: [0,0,0], accelBias: [0,0,0], accelScale: [1,1,1], faces: {}, status: '默认值已暂存，请点击保存写入接收机。'};
+        render();
+      }
       if (action === 'debug-start') startDebugPolling();
       if (action === 'debug-stop') stopDebugPolling();
       if (action === 'pidlive-start') void startPidLive();
