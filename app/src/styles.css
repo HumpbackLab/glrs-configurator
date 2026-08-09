@@ -56,6 +56,9 @@ button:disabled {
   gap: 18px;
   justify-content: space-between;
   padding: 14px clamp(16px, 3vw, 34px);
+  position: sticky;
+  top: 0;
+  z-index: 1000;
 }
 
 .brand h1 {
@@ -69,6 +72,37 @@ button:disabled {
   display: block;
   font-size: 12px;
   margin-top: 3px;
+}
+
+.connection-status {
+  align-items: center;
+  display: grid;
+  gap: 0 7px;
+  grid-template-columns: 8px auto;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.connection-status > span {
+  background: #94a3b8;
+  border-radius: 50%;
+  height: 8px;
+  width: 8px;
+}
+
+.connection-status strong {
+  color: #c8d1df;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.connection-status.is-connected > span { background: #34d399; }
+.connection-status.is-connecting > span { animation: connection-pulse 1s ease-in-out infinite; background: #fbbf24; }
+.connection-status.is-error > span { background: #fb7185; }
+
+@keyframes connection-pulse {
+  50% { opacity: 0.35; transform: scale(0.75); }
 }
 
 .connection {
@@ -108,10 +142,15 @@ button:disabled {
 }
 
 .nav {
+  align-self: start;
   background: #fff;
   border-right: 1px solid #d8dee6;
+  max-height: calc(100vh - 64px);
   min-height: calc(100vh - 64px);
+  overflow-y: auto;
   padding: 14px;
+  position: sticky;
+  top: 64px;
 }
 
 .nav button {

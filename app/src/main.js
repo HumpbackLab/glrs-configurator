@@ -858,6 +858,20 @@ async function checkConnectionHealth() {
   }
 }
 
+function connectionStatusLabel() {
+  const zh = getLocale() === 'zh-CN';
+  switch (state.connectionStatus) {
+    case 'connected':
+      return zh ? '已连接' : 'Connected';
+    case 'connecting':
+      return zh ? '正在连接' : 'Connecting';
+    case 'error':
+      return zh ? '连接失败' : 'Connection failed';
+    default:
+      return zh ? '未连接' : 'Disconnected';
+  }
+}
+
 function configValue(key, fallback) {
   const value = config()[key];
   return value === undefined ? fallback : value;
@@ -3681,6 +3695,7 @@ function render() {
     <div class="app">
       <header class="topbar">
         <div class="brand"><h1>${t('app.title')}</h1></div>
+        <div class="connection-status is-${state.connectionStatus}" title="${escapeHtml(apiBaseHost())}"><span></span><strong>${escapeHtml(connectionStatusLabel())}</strong></div>
         <select class="lang-switch" aria-label="${t('lang.label')}">
           <option value="zh-CN" ${selected(getLocale(), 'zh-CN')}>${t('lang.chinese')}</option>
           <option value="en" ${selected(getLocale(), 'en')}>${t('lang.english')}</option>
