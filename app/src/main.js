@@ -69,8 +69,6 @@ const state = {
   eulerPitch: 0,
   eulerYaw: 0,
   orientationCal: null,
-  imuSample: null,
-  imuCalibration: {gyroBias: [0, 0, 0], accelBias: [0, 0, 0], accelScale: [1, 1, 1], gyroSample: null, faces: {}, active: '', status: ''},
   debugSample: null,
   debugError: '',
   debugPolling: false,
@@ -118,7 +116,6 @@ const state = {
 };
 
 let debugPollTimer = null;
-let imuPollTimer = null;
 let debugPollInFlight = false;
 let debugPollGeneration = 0;
 let debugAircraftView = null;
@@ -127,6 +124,13 @@ let pwmRuntimeUpdateInFlight = false;
 let pwmRuntimePendingValues = null;
 let pidLiveTimer = null;
 let pidLiveRateWindow = [];
+let connectionHealthTimer = null;
+let connectionHealthInFlight = false;
+let connectionHealthFailures = 0;
+
+const CONNECTION_HEALTH_INTERVAL_MS = 2000;
+const CONNECTION_HEALTH_TIMEOUT_MS = 1500;
+const CONNECTION_HEALTH_FAILURE_LIMIT = 2;
 
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -738,6 +742,7 @@ async function loadDevice() {
   ]);
   state.target = target;
   state.connectionStatus = 'connected';
+  connectionHealthFailures = 0;
   state.configResponse = configResponse;
   state.hardware = hardwareResponse;
   const currentFirmwareVersion = (target?.version || '').split(/\s+/, 1)[0];
@@ -785,12 +790,6 @@ async function loadDevice() {
   state.extraMixerRows = 0;
   state.originalUid = bytesToList(configResponse?.config?.uid);
   state.originalUidType = configResponse?.config?.uidtype || '';
-  state.imuCalibration = {
-    gyroBias: [...(configResponse?.config?.fc_gyro_bias || [0, 0, 0])],
-    accelBias: [...(configResponse?.config?.fc_accel_bias || [0, 0, 0])],
-    accelScale: [...(configResponse?.config?.fc_accel_scale || [1, 1, 1])],
-    gyroSample: null, faces: {}, active: '', status: '',
-  };
   if (state.profileOriginal) {
     try {
       const {draft} = validateProfile(state.profileOriginal, {deviceAware: true});
@@ -823,19 +822,40 @@ async function connectDevice(successText) {
       await loadDevice();
     } catch (error) {
       state.connectionStatus = 'error';
+      state.target = null;
       throw error;
     }
   }, successText);
 }
 
-function connectionStatusDisplay() {
-  const zh = getLocale() === 'zh-CN';
-  return {
-    connected: {label: zh ? '已连接' : 'Connected', detail: state.target?.target || state.target?.['module-type'] || ''},
-    connecting: {label: zh ? '正在连接' : 'Connecting', detail: ''},
-    error: {label: zh ? '连接失败' : 'Connection failed', detail: ''},
-    idle: {label: zh ? '未连接' : 'Disconnected', detail: ''},
-  }[state.connectionStatus] || {label: zh ? '未连接' : 'Disconnected', detail: ''};
+function scheduleConnectionHealthCheck() {
+  if (connectionHealthTimer) return;
+  connectionHealthTimer = window.setTimeout(async () => {
+    connectionHealthTimer = null;
+    await checkConnectionHealth();
+    scheduleConnectionHealthCheck();
+  }, CONNECTION_HEALTH_INTERVAL_MS);
+}
+
+async function checkConnectionHealth() {
+  if (state.connectionStatus !== 'connected' || state.busy || connectionHealthInFlight) return;
+  connectionHealthInFlight = true;
+  try {
+    await apiFetch('/target', {timeout: CONNECTION_HEALTH_TIMEOUT_MS, cache: 'no-store'});
+    connectionHealthFailures = 0;
+  } catch {
+    connectionHealthFailures += 1;
+    if (connectionHealthFailures >= CONNECTION_HEALTH_FAILURE_LIMIT && state.connectionStatus === 'connected') {
+      state.connectionStatus = 'idle';
+      state.target = null;
+      state.configResponse = null;
+      state.hardware = null;
+      connectionHealthFailures = 0;
+      render();
+    }
+  } finally {
+    connectionHealthInFlight = false;
+  }
 }
 
 function configValue(key, fallback) {
@@ -2320,7 +2340,7 @@ function renderStatus() {
   const c = config();
   const h = hardware();
   return `<div class="debug-page">
-    <div class="grid">
+    <div class="grid status-summary-grid">
       <section class="panel">
         <h2>${t('status.device')}</h2>
         <div class="metric"><span>${t('status.target')}</span><strong>${escapeHtml(state.target?.target || c.target || t('value.unknown'))}</strong></div>
@@ -2789,7 +2809,6 @@ function renderFlight() {
             </div>
           </div>
         </div>
-        ${renderImuCalibration()}
         <div class="actions"><button class="primary" ${state.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot">${t('action.reboot')}</button></div>
       </form>
     </section>`;
@@ -2797,10 +2816,8 @@ function renderFlight() {
 
 function renderDebug() {
   const sample = state.debugSample;
-  const attitudeErrorRoll = sample ? sample.roll_deg - sample.accel_roll_deg : NaN;
-  const attitudeErrorPitch = sample ? sample.pitch_deg - sample.accel_pitch_deg : NaN;
   return `
-    <div class="grid">
+    <div class="grid debug-summary-grid">
       <section class="panel">
         <h2>${t('debug.headingPolling')}</h2>
         <div class="row">
@@ -2822,9 +2839,6 @@ function renderDebug() {
         <div class="metric"><span>${t('flight.roll')}</span><strong id="debug-roll">${formatDebugValue(sample?.roll_deg, 2, ' deg')}</strong></div>
         <div class="metric"><span>${t('flight.pitch')}</span><strong id="debug-pitch">${formatDebugValue(sample?.pitch_deg, 2, ' deg')}</strong></div>
         <div class="metric"><span>${t('flight.yaw')}</span><strong id="debug-yaw">${formatDebugValue(sample?.yaw_deg, 2, ' deg')}</strong></div>
-        <div class="metric"><span>${t('debug.accelRollRef')}</span><strong id="debug-accel-roll">${formatDebugValue(sample?.accel_roll_deg, 2, ' deg')}</strong></div>
-        <div class="metric"><span>${t('debug.accelPitchRef')}</span><strong id="debug-accel-pitch">${formatDebugValue(sample?.accel_pitch_deg, 2, ' deg')}</strong></div>
-        <div class="metric"><span>${t('debug.rollPitchError')}</span><strong id="debug-error-angle">${formatDebugValue(attitudeErrorRoll, 2, ' deg')} / ${formatDebugValue(attitudeErrorPitch, 2, ' deg')}</strong></div>
       </section>
       <section class="panel debug-aircraft-panel">
         <h2>${t('debug.headingAircraft')}</h2>
@@ -2833,6 +2847,7 @@ function renderDebug() {
         </div>
       </section>
     </div>
+    ${renderDebugImu()}
     ${renderPidLog()}
   </div>`;
 }
@@ -3014,7 +3029,7 @@ function renderPidLog() {
       <div class="helper">角速度图同时包含 RATE 与 ANGLE 飞控模式下的数据；角度图显示 ANGLE 模式的 Roll/Pitch。每张图可独立回看、缩放和查看采样点。</div>
     </section>
     <section class="panel pid-chart-panel">
-      <div class="panel-heading"><div><h2>实时波形</h2><div class="helper">关闭曲线仅停止渲染，内存中的采样数据会继续保留。</div></div></div>
+      <div class="panel-heading"><div><h2><span class="live-pulse" aria-hidden="true"></span>实时波形</h2><div class="helper">关闭曲线仅停止渲染，内存中的采样数据会继续保留。</div></div><span class="live-caption">LIVE DATA</span></div>
       <div class="pid-mode-tabs"><button type="button" data-pid-mode="rate" class="${state.pidLogMode === 'rate' ? 'active' : ''}">角速度</button><button type="button" data-pid-mode="angle" class="${state.pidLogMode === 'angle' ? 'active' : ''}">角度</button></div>
       <div class="pid-chart-heading"><h3>${state.pidLogMode === 'angle' ? t('pidlog.angleLoop') : t('pidlog.rateLoop')}</h3>${renderPidLegend(state.pidLogMode === 'angle' ? pidAngleSeries : pidRateSeries)}</div>
       <div class="pid-axis-charts">${pidChartDefinitions().map((chart) => `<div class="pid-chart-block" data-pid-chart-block="${chart.key}"><div class="pid-axis-title"><h3>${chart.title}</h3><span>${chart.unit}</span></div><canvas data-pid-chart="${chart.key}"></canvas><div class="pid-chart-timeline"><span>历史位置</span><input data-pid-timeline="${chart.key}" type="range" min="0" max="1000" step="1" value="1000"><button class="secondary" type="button" data-pid-latest="${chart.key}">最新</button></div></div>`).join('')}</div>
@@ -3030,9 +3045,9 @@ function drawPidChart(canvas, samples, chart) {
   canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
   const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr);
   const visible = chart.series.filter(([key]) => state.pidLogVisible[key] !== false);
-  ctx.fillStyle = '#08131f'; ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = '#f2eee6'; ctx.fillRect(0, 0, width, height);
   if (samples.length < 2) {
-    ctx.fillStyle = '#8ba2b8'; ctx.font = '13px sans-serif';
+    ctx.fillStyle = '#625b53'; ctx.font = '13px sans-serif';
     ctx.fillText(state.pidLogMode === 'angle' ? '等待 ANGLE 模式数据…' : '等待 RATE 模式数据…', 18, 30);
     return;
   }
@@ -3043,8 +3058,8 @@ function drawPidChart(canvas, samples, chart) {
   const pad = Math.max(1, (maxY - minY) * 0.08); minY -= pad; maxY += pad;
   const left = 54; const top = 15; const right = 12; const bottom = 30;
   const t0 = samples[0].timeUs; const span = Math.max(1, samples[samples.length - 1].timeUs - t0);
-  ctx.strokeStyle = '#294155'; ctx.lineWidth = 1; ctx.strokeRect(left, top, width - left - right, height - top - bottom);
-  ctx.fillStyle = '#8ba2b8'; ctx.font = '12px sans-serif'; ctx.fillText(maxY.toFixed(1), 4, top + 5); ctx.fillText(minY.toFixed(1), 4, height - bottom);
+  ctx.strokeStyle = '#c5b7a3'; ctx.lineWidth = 1; ctx.strokeRect(left, top, width - left - right, height - top - bottom);
+  ctx.fillStyle = '#625b53'; ctx.font = '12px sans-serif'; ctx.fillText(maxY.toFixed(1), 4, top + 5); ctx.fillText(minY.toFixed(1), 4, height - bottom);
   for (const [key, , color] of visible) {
     ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 1.25;
     samples.forEach((sample, index) => {
@@ -3065,7 +3080,7 @@ function drawPidChart(canvas, samples, chart) {
     }
     const pointX = left + ((nearest.timeUs - t0) / span) * plotWidth;
     ctx.save();
-    ctx.setLineDash([4, 4]); ctx.strokeStyle = '#64748b'; ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = '#8f806d'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(pointX, top); ctx.lineTo(pointX, height - bottom); ctx.stroke(); ctx.setLineDash([]);
     const lines = [`时间  ${((nearest.timeUs - t0) / 1e6).toFixed(3)} s`, ...visible.map(([key, label]) => `${label}  ${Number(nearest[key]).toFixed(2)} ${chart.unit}`)];
     ctx.font = '12px sans-serif';
@@ -3073,7 +3088,7 @@ function drawPidChart(canvas, samples, chart) {
     const boxHeight = lines.length * 19 + 12;
     const boxX = hover.x < width / 2 ? width - right - boxWidth - 8 : left + 8;
     const boxY = hover.y < height / 2 ? height - bottom - boxHeight - 8 : top + 8;
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.90)';
+    ctx.fillStyle = 'rgba(69, 61, 52, 0.94)';
     ctx.beginPath(); ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 7); ctx.fill();
     lines.forEach((line, index) => { ctx.fillStyle = index ? visible[index - 1][2] : '#e2e8f0'; ctx.fillText(line, boxX + 11, boxY + 18 + index * 19); });
     for (const [key, , color] of visible) {
@@ -3230,14 +3245,15 @@ function updateDebugView() {
     'debug-roll': formatDebugValue(sample?.roll_deg, 2, ' deg'),
     'debug-pitch': formatDebugValue(sample?.pitch_deg, 2, ' deg'),
     'debug-yaw': formatDebugValue(sample?.yaw_deg, 2, ' deg'),
-    'debug-accel-roll': formatDebugValue(sample?.accel_roll_deg, 2, ' deg'),
-    'debug-accel-pitch': formatDebugValue(sample?.accel_pitch_deg, 2, ' deg'),
-    'debug-error-angle': `${formatDebugValue(sample ? sample.roll_deg - sample.accel_roll_deg : NaN, 2, ' deg')} / ${formatDebugValue(sample ? sample.pitch_deg - sample.accel_pitch_deg : NaN, 2, ' deg')}`,
   };
   Object.entries(fields).forEach(([id, value]) => {
     const element = document.getElementById(id);
     if (element) element.textContent = value;
   });
+  const gyro = document.getElementById('debug-imu-gyro');
+  const accel = document.getElementById('debug-imu-accel');
+  if (gyro) gyro.innerHTML = formatImuVector([sample?.gyro_x_dps, sample?.gyro_y_dps, sample?.gyro_z_dps], '°/s');
+  if (accel) accel.innerHTML = formatImuVector([sample?.accel_x_mps2, sample?.accel_y_mps2, sample?.accel_z_mps2], 'm/s²');
   const errorElement = document.getElementById('debug-error');
   if (errorElement) {
     errorElement.textContent = state.debugError || '';
@@ -3350,120 +3366,22 @@ function renderUpdate() {
     </div>`;
 }
 
-function imuVector(value) {
-  return ['x', 'y', 'z'].map((axis) => Number(value?.[axis]));
-}
-
 function formatImuVector(value, unit) {
-  const vector = imuVector(value);
+  const vector = value.map(Number);
   return vector.map((number, index) => `<div class="imu-axis imu-axis-${['x', 'y', 'z'][index]}"><span class="imu-axis-name">${['X', 'Y', 'Z'][index]}</span><strong>${Number.isFinite(number) ? number.toFixed(3) : '—'}</strong><small>${unit}</small></div>`).join('');
 }
 
-function renderImuCalibration() {
-  const sample = state.imuSample?.imu || {};
-  const cal = state.imuCalibration;
-  const faces = [['xp', 'X 轴朝上'], ['xn', 'X 轴朝下'], ['yp', 'Y 轴朝上'], ['yn', 'Y 轴朝下'], ['zp', 'Z 轴朝上'], ['zn', 'Z 轴朝下']];
-  const completed = faces.filter(([id]) => cal.faces[id]).length;
-  const accelBusy = cal.active === 'accel';
-  const gyroBusy = cal.active === 'gyro';
-  return `<div class="imu-calibration-section">
+function renderDebugImu() {
+  const sample = state.debugSample;
+  return `<div class="imu-live-section debug-imu-row">
     <div class="imu-live-card">
-      <div class="imu-card-heading"><div><h3>IMU 实时数据</h3><p>传感器当前输出的校准前物理量</p></div><span class="imu-live-dot">实时</span></div>
+      <div class="imu-card-heading"><div><h3>IMU 实时数据</h3><p>通过 MSP 调试轮询查询；陀螺仪为固件上电校准后的数据</p></div><span class="imu-live-dot">MSP</span></div>
       <div class="imu-live-groups">
-        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>陀螺仪</span><small>角速度</small></div><div class="imu-axis-grid" id="imu-gyro-live">${formatImuVector(sample['gyro-dps'], '°/s')}</div></div>
-        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>加速度计</span><small>线加速度</small></div><div class="imu-axis-grid" id="imu-accel-live">${formatImuVector(sample['accel-mps2'], 'm/s²')}</div></div>
+        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>陀螺仪</span><small>校准后角速度</small></div><div class="imu-axis-grid" id="debug-imu-gyro">${formatImuVector([sample?.gyro_x_dps, sample?.gyro_y_dps, sample?.gyro_z_dps], '°/s')}</div></div>
+        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>加速度计</span><small>线加速度</small></div><div class="imu-axis-grid" id="debug-imu-accel">${formatImuVector([sample?.accel_x_mps2, sample?.accel_y_mps2, sample?.accel_z_mps2], 'm/s²')}</div></div>
       </div>
     </div>
-    <div class="imu-calibration-grid">
-      <section class="imu-cal-card ${accelBusy ? 'is-calibrating' : ''}">
-        <div class="imu-card-heading"><div><h3>加速度计六面校准</h3><p>请严格按顺序摆放设备，每次保持静止后采集</p></div><span class="cal-progress">${completed}/6</span></div>
-        <div class="imu-step-hint">${completed < 6 ? `下一步：将设备的 ${faces[completed][1]}，静置后按下对应按钮。` : '六个面已全部采集，请确认并保存以计算校准参数。'}</div>
-        <div class="imu-face-actions">${faces.map(([id,label], index) => `<button class="imu-face-button ${cal.faces[id] ? 'is-done' : ''} ${index === completed ? 'is-next' : ''}" type="button" data-imu-face="${id}" ${state.busy || (completed < 6 && index !== completed) ? 'disabled' : ''}><span>${index + 1}</span><strong>${label}</strong><small>${completed === 6 ? '已采集 · 可重新采集' : cal.faces[id] ? '已采集 ✓' : index === completed ? '点击采集' : '等待前一步'}</small></button>`).join('')}</div>
-        <div class="actions"><button class="primary" type="button" data-action="imu-accel-save" ${state.busy || completed !== 6 ? 'disabled' : ''}>计算并保存加速度计校准</button></div>
-        ${accelBusy ? '<div class="calibrating-overlay"><span></span>正在采样，请保持当前姿态静止…</div>' : ''}
-      </section>
-      <section class="imu-cal-card ${gyroBusy ? 'is-calibrating' : ''}">
-        <div class="imu-card-heading"><div><h3>陀螺仪校准</h3><p>${gyroBusy ? '请勿触碰设备，保持完全静止，正在采集零偏…' : cal.gyroSample ? '采样已经完成，请按下“确认并保存陀螺仪校准”按钮。' : '将设备放在稳定平面上，校准过程中保持完全静止'}</p></div>${cal.gyroSample ? '<span class="cal-ready">待确认</span>' : ''}</div>
-        <div class="gyro-still-visual"><span class="gyro-icon">◎</span><strong>${gyroBusy ? '保持静置' : cal.gyroSample ? '采样完成' : '准备校准'}</strong><small>${gyroBusy ? '采样结束前请勿移动设备' : cal.gyroSample ? '结果仅暂存在配置器中' : '点击下方按钮开始采样'}</small></div>
-        <div class="actions"><button class="secondary" type="button" data-action="imu-gyro-calibrate" ${state.busy ? 'disabled' : ''}>${cal.gyroSample ? '重新采集陀螺仪' : '开始陀螺仪校准'}</button><button class="primary" type="button" data-action="imu-gyro-save" ${state.busy || !cal.gyroSample ? 'disabled' : ''}>确认并保存陀螺仪校准</button></div>
-        ${gyroBusy ? '<div class="calibrating-overlay"><span></span>正在校准，请保持设备静置…</div>' : ''}
-      </section>
-    </div>
-    ${cal.status ? `<div class="notice imu-cal-status">${escapeHtml(cal.status)}</div>` : ''}
   </div>`;
-}
-
-async function readImuAverage(sampleCount = 30, intervalMs = 50) {
-  const gyro = [0, 0, 0]; const accel = [0, 0, 0];
-  for (let count = 0; count < sampleCount; count += 1) {
-    const status = await apiFetch('/status.json', {timeout: 2000});
-    const imu = status?.imu;
-    const g = imuVector(imu?.['gyro-dps']); const a = imuVector(imu?.['accel-mps2']);
-    if (!imu?.['accel-valid'] || [...g, ...a].some((v) => !Number.isFinite(v))) throw new Error('IMU数据无效');
-    g.forEach((v, i) => { gyro[i] += v; }); a.forEach((v, i) => { accel[i] += v; });
-    await sleep(intervalMs);
-  }
-  return {gyro: gyro.map((v) => v / sampleCount), accel: accel.map((v) => v / sampleCount)};
-}
-
-async function calibrateGyro() {
-  state.imuCalibration.active = 'gyro';
-  state.imuCalibration.status = '陀螺仪正在采样，请保持设备完全静止。';
-  await runBusy(async () => {
-    const result = await readImuAverage(50, 50);
-    state.imuCalibration.gyroSample = result.gyro;
-    state.imuCalibration.status = '陀螺仪采样完成，尚未修改零偏；请确认并保存。';
-  });
-  state.imuCalibration.active = '';
-  render();
-}
-
-async function captureAccelFace(face) {
-  state.imuCalibration.active = 'accel';
-  await runBusy(async () => {
-    const result = await readImuAverage(30, 50);
-    state.imuCalibration.faces[face] = result.accel;
-    const f = state.imuCalibration.faces;
-    const count = Object.keys(f).length;
-    state.imuCalibration.status = count === 6 ? '六面原始数据已暂存，尚未计算或修改校准参数；请确认并保存。' : `已采集 ${count}/6 个面，请继续下一步。`;
-  });
-  state.imuCalibration.active = '';
-  render();
-}
-
-async function saveAccelCalibration() {
-  await runBusy(async () => {
-    const f = state.imuCalibration.faces;
-    if (!['xp','xn','yp','yn','zp','zn'].every((key) => f[key])) throw new Error('请先依次完成六个面的采集');
-    const gravity = 9.80665;
-    const pairs = [[f.xp[0], f.xn[0]], [f.yp[1], f.yn[1]], [f.zp[2], f.zn[2]]];
-    const accelBias = pairs.map(([positive, negative]) => (positive + negative) / 2);
-    const accelScale = pairs.map(([positive, negative]) => 2 * gravity / Math.abs(positive - negative));
-    if (accelScale.some((v) => !Number.isFinite(v) || v < 0.5 || v > 1.5)) throw new Error('六面数据无效，请确认每个轴的正反方向均正确采集');
-    const next = {...config(), fc_accel_bias: accelBias, fc_accel_scale: accelScale};
-    delete next.pwm;
-    await apiFetch('/config', {method: 'POST', body: JSON.stringify(next)});
-    await loadDevice();
-  }, '加速度计六面校准已计算并保存');
-}
-
-async function saveGyroCalibration() {
-  await runBusy(async () => {
-    if (!state.imuCalibration.gyroSample) throw new Error('请先完成陀螺仪采样');
-    const next = {...config(), fc_gyro_bias: state.imuCalibration.gyroSample};
-    delete next.pwm;
-    await apiFetch('/config', {method: 'POST', body: JSON.stringify(next)});
-    await loadDevice();
-  }, '陀螺仪校准已确认并保存');
-}
-
-async function pollImuOnce() {
-  if (state.tab !== 'flight') return;
-  try { state.imuSample = await apiFetch('/status.json', {timeout: 2000}); } catch (_) { /* keep last sample */ }
-  const gyro = document.querySelector('#imu-gyro-live'); const accel = document.querySelector('#imu-accel-live');
-  if (gyro) gyro.innerHTML = formatImuVector(state.imuSample?.imu?.['gyro-dps'], '°/s');
-  if (accel) accel.innerHTML = formatImuVector(state.imuSample?.imu?.['accel-mps2'], 'm/s²');
-  if (state.tab === 'flight') imuPollTimer = window.setTimeout(pollImuOnce, 200);
 }
 
 function renderCurrentTab() {
@@ -3759,31 +3677,23 @@ async function stopDebugPolling(disconnect = true) {
 }
 
 function render() {
-  const connectionState = connectionStatusDisplay();
   document.querySelector('#app').innerHTML = `
     <div class="app">
-      <a class="skip-link" href="#main-content">${getLocale() === 'zh-CN' ? '跳到主要内容' : 'Skip to main content'}</a>
       <header class="topbar">
-        <div class="brand"><h1>${t('app.title')}</h1><span>FLIGHT CONTROL · TELEMETRY CONSOLE</span></div>
+        <div class="brand"><h1>${t('app.title')}</h1></div>
         <select class="lang-switch" aria-label="${t('lang.label')}">
           <option value="zh-CN" ${selected(getLocale(), 'zh-CN')}>${t('lang.chinese')}</option>
           <option value="en" ${selected(getLocale(), 'en')}>${t('lang.english')}</option>
         </select>
         <form class="connection" id="connect-form">
-          <div class="connection-state is-${state.connectionStatus}" title="${escapeHtml(connectionState.detail)}"><span></span><strong>${escapeHtml(connectionState.label)}</strong>${connectionState.detail ? `<small>${escapeHtml(connectionState.detail)}</small>` : ''}</div>
           <input name="api" value="${escapeHtml(apiBaseHost())}" aria-label="API base URL">
           <button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.connect')}</button>
           <button class="secondary" type="button" data-action="refresh" ${state.busy ? 'disabled' : ''}>${t('action.refresh')}</button>
         </form>
       </header>
-      <div class="status">
-        <div class="metric"><span>API</span><strong>${escapeHtml(apiBaseHost())}</strong></div>
-        <div class="metric"><span>${t('status.target')}</span><strong>${escapeHtml(state.target?.['module-type'] || 'RX')}</strong></div>
-        <div class="metric"><span>${t('status.rx')}</span><strong>${escapeHtml(state.target?.['radio-type'] || t('value.unknown'))}</strong></div>
-      </div>
       <div class="shell">
         <nav class="nav">${tabs.map(([id, getLabel]) => `<button type="button" data-tab="${id}" class="${state.tab === id ? 'active' : ''}">${getLabel()}</button>`).join('')}</nav>
-        <main class="content" id="main-content" tabindex="-1">
+        <main class="content">
           ${state.message ? `<div class="message ${state.message.type}">${escapeHtml(state.message.text)}</div>` : ''}
           ${state.busy ? `<div class="notice">${t('notice.working')}</div>` : ''}
           ${renderCurrentTab()}
@@ -3820,7 +3730,6 @@ function wireEvents() {
 
   document.querySelectorAll('[data-tab]').forEach((button) => {
     button.addEventListener('click', () => {
-      if (imuPollTimer) { window.clearTimeout(imuPollTimer); imuPollTimer = null; }
       state.tab = button.dataset.tab;
       state.message = null;
       render();
@@ -3939,11 +3848,6 @@ function wireEvents() {
   wirePwmForm();
   initDebugAircraftView();
   drawPidCharts();
-  if (state.tab === 'flight' && !imuPollTimer) void pollImuOnce();
-
-  document.querySelectorAll('[data-imu-face]').forEach((button) => {
-    button.addEventListener('click', () => void captureAccelFace(button.dataset.imuFace));
-  });
 
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -3959,9 +3863,6 @@ function wireEvents() {
       if (action === 'add-motor') changeMixerRowCount(1);
       if (action === 'remove-motor') changeMixerRowCount(-1);
       if (action === 'quick-orientation') quickOrientationStep();
-      if (action === 'imu-gyro-calibrate') void calibrateGyro();
-      if (action === 'imu-accel-save') void saveAccelCalibration();
-      if (action === 'imu-gyro-save') void saveGyroCalibration();
       if (action === 'debug-start') startDebugPolling();
       if (action === 'debug-stop') stopDebugPolling();
       if (action === 'pidlive-start') void startPidLive();
@@ -4096,6 +3997,7 @@ window.addEventListener('beforeunload', (event) => {
 });
 render();
 async function initializeApp() {
+  scheduleConnectionHealthCheck();
   await restoreDownloadedFirmware();
   await connectDevice(t('message.connected'));
   if (isTauriApp()) checkAppUpdate();

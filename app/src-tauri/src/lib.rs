@@ -83,6 +83,12 @@ struct FcDebugSample {
     yaw_deg: f32,
     accel_roll_deg: f32,
     accel_pitch_deg: f32,
+    gyro_x_dps: f32,
+    gyro_y_dps: f32,
+    gyro_z_dps: f32,
+    accel_x_mps2: f32,
+    accel_y_mps2: f32,
+    accel_z_mps2: f32,
 }
 
 fn crc8_dvb_s2(mut crc: u8, value: u8) -> u8 {
@@ -146,7 +152,7 @@ fn read_exact_timeout(stream: &mut TcpStream, buffer: &mut [u8]) -> Result<bool,
 
 fn parse_debug_payload(payload: &[u8]) -> Result<FcDebugSample, String> {
     let mut offset = 0usize;
-    if payload.len() != 10 {
+    if payload.len() != 22 {
         return Err("short MSP debug payload".into());
     }
     let roll_cd = read_i16(payload, &mut offset)?;
@@ -154,6 +160,12 @@ fn parse_debug_payload(payload: &[u8]) -> Result<FcDebugSample, String> {
     let yaw_cd = read_i16(payload, &mut offset)?;
     let accel_roll_cd = read_i16(payload, &mut offset)?;
     let accel_pitch_cd = read_i16(payload, &mut offset)?;
+    let gyro_x_cdps = read_i16(payload, &mut offset)?;
+    let gyro_y_cdps = read_i16(payload, &mut offset)?;
+    let gyro_z_cdps = read_i16(payload, &mut offset)?;
+    let accel_x_mmps2 = read_i16(payload, &mut offset)?;
+    let accel_y_mmps2 = read_i16(payload, &mut offset)?;
+    let accel_z_mmps2 = read_i16(payload, &mut offset)?;
 
     Ok(FcDebugSample {
         roll_deg: roll_cd as f32 / 100.0,
@@ -161,6 +173,12 @@ fn parse_debug_payload(payload: &[u8]) -> Result<FcDebugSample, String> {
         yaw_deg: yaw_cd as f32 / 100.0,
         accel_roll_deg: accel_roll_cd as f32 / 100.0,
         accel_pitch_deg: accel_pitch_cd as f32 / 100.0,
+        gyro_x_dps: gyro_x_cdps as f32 / 100.0,
+        gyro_y_dps: gyro_y_cdps as f32 / 100.0,
+        gyro_z_dps: gyro_z_cdps as f32 / 100.0,
+        accel_x_mps2: accel_x_mmps2 as f32 / 1000.0,
+        accel_y_mps2: accel_y_mmps2 as f32 / 1000.0,
+        accel_z_mps2: accel_z_mmps2 as f32 / 1000.0,
     })
 }
 
