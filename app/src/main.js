@@ -80,15 +80,10 @@ const state = {
   debugError: '',
   debugPolling: false,
   debugPollRateHz: 20,
-  pidLogs: [],
-  pidLogStatus: {ready: false, preparing: false, recording: false, rearmRequired: false},
   pidLogError: '',
-  pidLogLoading: false,
-  pidLogActive: null,
   pidLogMode: 'rate',
   pidLogSamples: [],
   pidLogVisible: {},
-  pidLogRaw: null,
   pidLiveReceiving: false,
   pidLiveStarting: false,
   pidLivePackets: 0,
@@ -874,16 +869,15 @@ async function checkConnectionHealth() {
 }
 
 function connectionStatusLabel() {
-  const zh = getLocale() === 'zh-CN';
   switch (state.connectionStatus) {
     case 'connected':
-      return zh ? '已连接' : 'Connected';
+      return t('connection.connected');
     case 'connecting':
-      return zh ? '正在连接' : 'Connecting';
+      return t('connection.connecting');
     case 'error':
-      return zh ? '连接失败' : 'Connection failed';
+      return t('connection.error');
     default:
-      return zh ? '未连接' : 'Disconnected';
+      return t('connection.disconnected');
   }
 }
 
@@ -1028,14 +1022,13 @@ async function saveFlight(event) {
       nextConfig.fc_mode_conditions[mode] = [channel, start, end];
     });
     nextConfig.fc_wifi_conditions = {};
-    ['rf', 'coexist'].forEach((mode) => {
-      if (!form[`fc_wifi_${mode}_enabled`].checked) return;
-      const channel = intOrDefault(form[`fc_wifi_${mode}_channel`].value, 7);
-      const start = intOrDefault(form[`fc_wifi_${mode}_start`].value, 0);
-      const end = intOrDefault(form[`fc_wifi_${mode}_end`].value, 0);
-      if (start < 900 || end > 2100 || start >= end) throw new Error(`${t('message.invalidRange')}: ${mode.toUpperCase()}`);
-      nextConfig.fc_wifi_conditions[mode] = [channel, start, end];
-    });
+    if (form.fc_wifi_coexist_enabled.checked) {
+      const channel = intOrDefault(form.fc_wifi_coexist_channel.value, 7);
+      const start = intOrDefault(form.fc_wifi_coexist_start.value, 0);
+      const end = intOrDefault(form.fc_wifi_coexist_end.value, 0);
+      if (start < 900 || end > 2100 || start >= end) throw new Error(`${t('message.invalidRange')}: ${t('flight.wifiCoexist')}`);
+      nextConfig.fc_wifi_conditions.coexist = [channel, start, end];
+    }
     nextConfig.fc_arm_enabled = form.fc_arm_enabled.checked;
     nextConfig.fc_arm_channel = intOrDefault(form.fc_arm_channel.value, 5);
     const armStart = intOrDefault(form.fc_arm_start.value, 0);
@@ -2906,9 +2899,7 @@ function renderFlight() {
   const mixer = flightConfigValue('fc_mixer', []);
   const mixerServos = flightConfigValue('fc_mixer_servos', []);
   const modeConditions = flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 1700]});
-  const wifiConditions = flightConfigValue('fc_wifi_conditions', {
-    rf: [7, 900, 1300], coexist: [7, 1700, 2100],
-  });
+  const wifiConditions = flightConfigValue('fc_wifi_conditions', {coexist: [7, 1700, 2100]});
   const armEnabled = flightConfigValue('fc_arm_enabled', false);
   const armChannel = flightConfigValue('fc_arm_channel', 5);
   const armRange = flightConfigValue('fc_arm_range', [1700, 2100]);
@@ -2941,7 +2932,6 @@ function renderFlight() {
             <div><h3>${t('flight.wifiModeRanges')}</h3><div class="helper">${t('flight.wifiRangeHelp')}</div></div>
           </div>
           <div class="mode-range-list">
-            ${renderActivationRange('wifi_rf', t('flight.wifiRf'), t('flight.wifiRfDescription'), wifiConditions.rf?.slice(1) ?? [900, 1300], '#64748b', !wifiConditions.rf, wifiConditions.rf?.[0] ?? 7, auxOptions)}
             ${renderActivationRange('wifi_coexist', t('flight.wifiCoexist'), t('flight.wifiCoexistDescription'), wifiConditions.coexist?.slice(1) ?? [1700, 2100], '#0891b2', !wifiConditions.coexist, wifiConditions.coexist?.[0] ?? 7, auxOptions)}
           </div>
         </div>
@@ -3073,7 +3063,6 @@ function renderDebug() {
   </div>`;
 }
 
-const PID_LOG_MAGIC = 0x474c5253;
 const pidRateSeries = [
   ['rateRollTarget', 'Roll target', '#2563eb'], ['rateRollState', 'Roll state', '#60a5fa'],
   ['ratePitchTarget', 'Pitch target', '#dc2626'], ['ratePitchState', 'Pitch state', '#f87171'],
@@ -3087,11 +3076,11 @@ const pidAngleSeries = [
 function pidChartDefinitions() {
   if (state.pidLogMode === 'angle') {
     return [
-      {key: 'angle', title: 'Roll / Pitch 角度', unit: 'deg', series: pidAngleSeries},
+      {key: 'angle', title: t('pidlog.angleChart'), unit: 'deg', series: pidAngleSeries},
     ];
   }
   return [
-    {key: 'rate', title: 'Roll / Pitch / Yaw 角速度', unit: 'deg/s', series: pidRateSeries},
+    {key: 'rate', title: t('pidlog.rateChart'), unit: 'deg/s', series: pidRateSeries},
   ];
 }
 
@@ -3106,131 +3095,6 @@ function pidChartView(key) {
   return state.pidChartViews[key];
 }
 
-function pidLogDuration(ms) {
-  const seconds = Math.max(0, Math.round(Number(ms) / 1000));
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-}
-
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (const value of bytes) {
-    crc ^= value;
-    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function parsePidLog(buffer) {
-  const view = new DataView(buffer);
-  if (view.byteLength < 64 || view.getUint32(0, true) !== PID_LOG_MAGIC) throw new Error(t('pidlog.invalidFile'));
-  const version = view.getUint16(4, true);
-  const headerSize = view.getUint16(6, true);
-  const recordSize = view.getUint16(8, true);
-  const recordCount = view.getUint32(24, true);
-  const dataBytes = view.getUint32(32, true);
-  const expectedCrc = view.getUint32(36, true);
-  if (version !== 1 || headerSize !== 64 || recordSize !== 32 || dataBytes !== recordCount * recordSize || headerSize + dataBytes > view.byteLength) {
-    throw new Error(t('pidlog.unsupportedFile'));
-  }
-  const actualCrc = crc32(new Uint8Array(buffer, headerSize, dataBytes));
-  if (actualCrc !== expectedCrc) throw new Error(t('pidlog.crcError'));
-  const samples = [];
-  for (let index = 0; index < recordCount; index += 1) {
-    const offset = headerSize + index * recordSize;
-    samples.push({
-      timeUs: view.getUint32(offset, true), sequence: view.getUint32(offset + 4, true), mode: view.getUint8(offset + 8),
-      loopTimeUs: view.getUint16(offset + 10, true),
-      angleRollTarget: view.getInt16(offset + 12, true) / 100, anglePitchTarget: view.getInt16(offset + 14, true) / 100,
-      angleRollState: view.getInt16(offset + 16, true) / 100, anglePitchState: view.getInt16(offset + 18, true) / 100,
-      rateRollTarget: view.getInt16(offset + 20, true) / 10, ratePitchTarget: view.getInt16(offset + 22, true) / 10,
-      rateYawTarget: view.getInt16(offset + 24, true) / 10, rateRollState: view.getInt16(offset + 26, true) / 10,
-      ratePitchState: view.getInt16(offset + 28, true) / 10, rateYawState: view.getInt16(offset + 30, true) / 10,
-    });
-  }
-  return {
-    id: view.getUint32(12, true), durationMs: view.getUint32(20, true), droppedRecords: view.getUint32(28, true),
-    sampleRateHz: view.getUint16(10, true), samples,
-  };
-}
-
-async function loadPidLogs() {
-  state.pidLogLoading = true;
-  state.pidLogError = '';
-  render();
-  try {
-    const response = await apiFetch('/pidlogs', {timeout: 10000});
-    const result = await response.json();
-    state.pidLogs = Array.isArray(result.logs) ? result.logs.sort((a, b) => b.id - a.id) : [];
-    state.pidLogStatus = {
-      ready: Boolean(result.ready), preparing: Boolean(result.preparing), recording: Boolean(result.recording),
-      rearmRequired: Boolean(result.rearm_required),
-    };
-  } catch (error) {
-    state.pidLogError = error.message || String(error);
-  } finally {
-    state.pidLogLoading = false;
-    render();
-  }
-}
-
-async function openPidLog() {
-  state.pidLogLoading = true;
-  state.pidLogError = '';
-  render();
-  try {
-    const blob = await apiFetchBlob('/pidlogs/download', 60000);
-    const buffer = await blob.arrayBuffer();
-    state.pidLogActive = parsePidLog(buffer);
-    state.pidLogSamples = state.pidLogActive.samples;
-    state.pidLogRaw = blob;
-    const hasAngle = state.pidLogSamples.some((sample) => sample.mode === 2);
-    state.pidLogMode = hasAngle ? 'angle' : 'rate';
-  } catch (error) {
-    state.pidLogError = error.message || String(error);
-  } finally {
-    state.pidLogLoading = false;
-    render();
-  }
-}
-
-async function erasePidLogs() {
-  if (!window.confirm(t('pidlog.eraseConfirm'))) return;
-  try {
-    await apiFetch('/pidlogs/erase', {method: 'POST', body: '{}', timeout: 30000});
-    state.pidLogActive = null;
-    state.pidLogSamples = [];
-    state.pidLogRaw = null;
-    await loadPidLogs();
-  } catch (error) {
-    state.pidLogError = error.message || String(error);
-    render();
-  }
-}
-
-async function preparePidLog() {
-  if (!window.confirm(t('pidlog.prepareConfirm'))) return;
-  try {
-    await apiFetch('/pidlogs/prepare', {method: 'POST', body: '{}', timeout: 10000});
-    state.pidLogActive = null;
-    state.pidLogSamples = [];
-    state.pidLogRaw = null;
-    await loadPidLogs();
-  } catch (error) {
-    state.pidLogError = error.message || String(error);
-    render();
-  }
-}
-
-function savePidLogFile() {
-  if (!state.pidLogRaw || !state.pidLogActive) return;
-  const url = URL.createObjectURL(state.pidLogRaw);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `glrs-pid-${state.pidLogActive.id}.glrslog`;
-  anchor.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
 function renderPidLegend(series) {
   return `<div class="pid-series">${series.map(([key, label, color]) => `<label><input type="checkbox" data-pid-series="${key}" ${state.pidLogVisible[key] === false ? '' : 'checked'}><span style="--series-color:${color}"></span>${label}</label>`).join('')}</div>`;
 }
@@ -3238,21 +3102,21 @@ function renderPidLegend(series) {
 function renderPidLog() {
   return `<div class="pid-log-layout">
     <section class="panel">
-      <div class="panel-heading"><div><h2>PID 波形</h2><div class="helper">点击开始采集后通过 MSP 主动轮询飞控；无需切换 CH6，曲线不补点、不插值。</div></div></div>
-      <div class="actions"><button class="primary" type="button" data-action="pidlive-${state.pidLiveReceiving ? 'stop' : 'start'}" ${state.pidLiveStarting ? 'disabled' : ''}>${state.pidLiveStarting ? '连接中…' : state.pidLiveReceiving ? '停止采集' : '开始采集'}</button><button class="secondary" type="button" data-action="pidlive-clear">清空当前数据</button><button class="secondary" type="button" data-action="pidlive-save" ${state.pidLogSamples.length ? '' : 'disabled'}>保存原始数据</button></div>
+      <div class="panel-heading"><div><h2>${t('pidlog.heading')}</h2><div class="helper">${t('pidlog.description')}</div></div></div>
+      <div class="actions"><button class="primary" type="button" data-action="pidlive-${state.pidLiveReceiving ? 'stop' : 'start'}" ${state.pidLiveStarting ? 'disabled' : ''}>${state.pidLiveStarting ? t('pidlog.connecting') : state.pidLiveReceiving ? t('pidlog.stop') : t('pidlog.start')}</button><button class="secondary" type="button" data-action="pidlive-clear">${t('pidlog.clear')}</button><button class="secondary" type="button" data-action="pidlive-save" ${state.pidLogSamples.length ? '' : 'disabled'}>${t('pidlog.save')}</button></div>
       ${state.pidLogError ? `<div class="message error">${escapeHtml(state.pidLogError)}</div>` : ''}
-      <div class="metrics"><div class="metric"><span>轮询频率</span><strong id="pid-live-rate">${state.pidLiveRateHz.toFixed(1)} Hz</strong></div><div class="metric"><span>数据点</span><strong id="pid-live-packets">${state.pidLivePackets.toLocaleString()}</strong></div><div class="metric"><span>重复帧</span><strong id="pid-live-duplicates">${state.pidLiveDuplicates.toLocaleString()}</strong></div></div>
+      <div class="metrics"><div class="metric"><span>${t('pidlog.pollRate')}</span><strong id="pid-live-rate">${state.pidLiveRateHz.toFixed(1)} Hz</strong></div><div class="metric"><span>${t('pidlog.points')}</span><strong id="pid-live-packets">${state.pidLivePackets.toLocaleString()}</strong></div><div class="metric"><span>${t('pidlog.duplicates')}</span><strong id="pid-live-duplicates">${state.pidLiveDuplicates.toLocaleString()}</strong></div></div>
       <div class="pid-time-controls">
-        <label>显示时间窗口 <select id="pid-live-window">${![0, 5, 10, 30].includes(state.pidLiveWindowSeconds) ? `<option value="${state.pidLiveWindowSeconds}" selected>${state.pidLiveWindowSeconds.toFixed(2)} s</option>` : ''}<option value="5" ${state.pidLiveWindowSeconds === 5 ? 'selected' : ''}>5 s</option><option value="10" ${state.pidLiveWindowSeconds === 10 ? 'selected' : ''}>10 s</option><option value="30" ${state.pidLiveWindowSeconds === 30 ? 'selected' : ''}>30 s</option><option value="0" ${state.pidLiveWindowSeconds === 0 ? 'selected' : ''}>全部</option></select></label>
-        <span id="pid-window-label">${state.pidLiveWindowSeconds ? `${state.pidLiveWindowSeconds.toFixed(2)} s` : '全部'}</span>
+        <label>${t('pidlog.window')} <select id="pid-live-window">${![0, 5, 10, 30].includes(state.pidLiveWindowSeconds) ? `<option value="${state.pidLiveWindowSeconds}" selected>${state.pidLiveWindowSeconds.toFixed(2)} s</option>` : ''}<option value="5" ${state.pidLiveWindowSeconds === 5 ? 'selected' : ''}>5 s</option><option value="10" ${state.pidLiveWindowSeconds === 10 ? 'selected' : ''}>10 s</option><option value="30" ${state.pidLiveWindowSeconds === 30 ? 'selected' : ''}>30 s</option><option value="0" ${state.pidLiveWindowSeconds === 0 ? 'selected' : ''}>${t('pidlog.all')}</option></select></label>
+        <span id="pid-window-label">${state.pidLiveWindowSeconds ? `${state.pidLiveWindowSeconds.toFixed(2)} s` : t('pidlog.all')}</span>
       </div>
-      <div class="helper">角速度图同时包含 RATE 与 ANGLE 飞控模式下的数据；角度图显示 ANGLE 模式的 Roll/Pitch。每张图可独立回看、缩放和查看采样点。</div>
+      <div class="helper">${t('pidlog.chartHelp')}</div>
     </section>
     <section class="panel pid-chart-panel">
-      <div class="panel-heading"><div><h2><span class="live-pulse" aria-hidden="true"></span>实时波形</h2><div class="helper">关闭曲线仅停止渲染，内存中的采样数据会继续保留。</div></div><span class="live-caption">LIVE DATA</span></div>
-      <div class="pid-mode-tabs"><button type="button" data-pid-mode="rate" class="${state.pidLogMode === 'rate' ? 'active' : ''}">角速度</button><button type="button" data-pid-mode="angle" class="${state.pidLogMode === 'angle' ? 'active' : ''}">角度</button></div>
+      <div class="panel-heading"><div><h2><span class="live-pulse" aria-hidden="true"></span>${t('pidlog.liveHeading')}</h2><div class="helper">${t('pidlog.liveHelp')}</div></div><span class="live-caption">LIVE DATA</span></div>
+      <div class="pid-mode-tabs"><button type="button" data-pid-mode="rate" class="${state.pidLogMode === 'rate' ? 'active' : ''}">${t('pidlog.rateTab')}</button><button type="button" data-pid-mode="angle" class="${state.pidLogMode === 'angle' ? 'active' : ''}">${t('pidlog.angleTab')}</button></div>
       <div class="pid-chart-heading"><h3>${state.pidLogMode === 'angle' ? t('pidlog.angleLoop') : t('pidlog.rateLoop')}</h3>${renderPidLegend(state.pidLogMode === 'angle' ? pidAngleSeries : pidRateSeries)}</div>
-      <div class="pid-axis-charts">${pidChartDefinitions().map((chart) => `<div class="pid-chart-block" data-pid-chart-block="${chart.key}"><div class="pid-axis-title"><h3>${chart.title}</h3><span>${chart.unit}</span></div><canvas data-pid-chart="${chart.key}"></canvas><div class="pid-chart-timeline"><span>历史位置</span><input data-pid-timeline="${chart.key}" type="range" min="0" max="1000" step="1" value="1000"><button class="secondary" type="button" data-pid-latest="${chart.key}">最新</button></div></div>`).join('')}</div>
+      <div class="pid-axis-charts">${pidChartDefinitions().map((chart) => `<div class="pid-chart-block" data-pid-chart-block="${chart.key}"><div class="pid-axis-title"><h3>${chart.title}</h3><span>${chart.unit}</span></div><canvas data-pid-chart="${chart.key}"></canvas><div class="pid-chart-timeline"><span>${t('pidlog.history')}</span><input data-pid-timeline="${chart.key}" type="range" min="0" max="1000" step="1" value="1000"><button class="secondary" type="button" data-pid-latest="${chart.key}">${t('pidlog.latest')}</button></div></div>`).join('')}</div>
     </section>
   </div>`;
 }
@@ -3268,7 +3132,7 @@ function drawPidChart(canvas, samples, chart) {
   ctx.fillStyle = '#f2eee6'; ctx.fillRect(0, 0, width, height);
   if (samples.length < 2) {
     ctx.fillStyle = '#625b53'; ctx.font = '13px sans-serif';
-    ctx.fillText(state.pidLogMode === 'angle' ? '等待 ANGLE 模式数据…' : '等待 RATE 模式数据…', 18, 30);
+    ctx.fillText(state.pidLogMode === 'angle' ? t('pidlog.waitingAngle') : t('pidlog.waitingRate'), 18, 30);
     return;
   }
   if (!visible.length) return;
@@ -3302,7 +3166,7 @@ function drawPidChart(canvas, samples, chart) {
     ctx.save();
     ctx.setLineDash([4, 4]); ctx.strokeStyle = '#8f806d'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(pointX, top); ctx.lineTo(pointX, height - bottom); ctx.stroke(); ctx.setLineDash([]);
-    const lines = [`时间  ${((nearest.timeUs - t0) / 1e6).toFixed(3)} s`, ...visible.map(([key, label]) => `${label}  ${Number(nearest[key]).toFixed(2)} ${chart.unit}`)];
+    const lines = [`${t('pidlog.time')}  ${((nearest.timeUs - t0) / 1e6).toFixed(3)} s`, ...visible.map(([key, label]) => `${label}  ${Number(nearest[key]).toFixed(2)} ${chart.unit}`)];
     ctx.font = '12px sans-serif';
     const boxWidth = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 22;
     const boxHeight = lines.length * 19 + 12;
@@ -3338,7 +3202,7 @@ function updatePidLiveView(redraw = true) {
 function drawPidCharts() {
   const allModeSamples = pidSamplesForDisplay();
   const label = document.querySelector('#pid-window-label');
-  if (label) label.textContent = state.pidLiveWindowSeconds ? `${state.pidLiveWindowSeconds.toFixed(2)} s` : '全部';
+  if (label) label.textContent = state.pidLiveWindowSeconds ? `${state.pidLiveWindowSeconds.toFixed(2)} s` : t('pidlog.all');
   for (const chart of pidChartDefinitions()) {
     const view = pidChartView(chart.key);
     let samples = allModeSamples;
@@ -3620,10 +3484,10 @@ function renderDebugImu() {
   const sample = state.debugSample;
   return `<div class="imu-live-section debug-imu-row">
     <div class="imu-live-card">
-      <div class="imu-card-heading"><div><h3>IMU 实时数据</h3><p>通过 MSP 调试轮询查询；数据已经过飞控正方向 TF 变换</p></div><span class="imu-live-dot">MSP</span></div>
+      <div class="imu-card-heading"><div><h3>${t('debugImu.heading')}</h3><p>${t('debugImu.description')}</p></div><span class="imu-live-dot">MSP</span></div>
       <div class="imu-live-groups">
-        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>陀螺仪</span><small>TF 后角速度</small></div><div class="imu-axis-grid" id="debug-imu-gyro">${formatImuVector([sample?.gyro_x_dps, sample?.gyro_y_dps, sample?.gyro_z_dps], '°/s')}</div></div>
-        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>加速度计</span><small>TF 后加速度</small></div><div class="imu-axis-grid" id="debug-imu-accel">${formatImuVector([sample?.accel_x_mps2, sample?.accel_y_mps2, sample?.accel_z_mps2], 'm/s²')}</div></div>
+        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>${t('debugImu.gyroscope')}</span><small>${t('debugImu.gyroDescription')}</small></div><div class="imu-axis-grid" id="debug-imu-gyro">${formatImuVector([sample?.gyro_x_dps, sample?.gyro_y_dps, sample?.gyro_z_dps], '°/s')}</div></div>
+        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>${t('debugImu.accelerometer')}</span><small>${t('debugImu.accelDescription')}</small></div><div class="imu-axis-grid" id="debug-imu-accel">${formatImuVector([sample?.accel_x_mps2, sample?.accel_y_mps2, sample?.accel_z_mps2], 'm/s²')}</div></div>
       </div>
     </div>
   </div>`;

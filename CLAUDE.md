@@ -49,7 +49,7 @@ app/
 - **MD5**: Inline implementation used to derive 6-byte UID from binding phrase.
 - **Debug polling**: Calls Tauri Rust commands via `@tauri-apps/api/core` (`invoke()`). The Rust backend handles MSP v2 framing and TCP socket management.
 
-**Backend** (`app/src-tauri/src/lib.rs`): Three `#[tauri::command]` functions — `msp_debug_connect`, `msp_debug_disconnect`, `msp_debug_poll`. The poll command sends an MSP v2 request (`MSP_ELRS_FC_DEBUG`, function `0x0450`), parses the 10-byte payload into `FcDebugSample` (roll/pitch/yaw/accel_roll/accel_pitch in centidegrees → degrees). CRC8-DVB-S2 checksum validation. TCP timeout is 500ms.
+**Backend** (`app/src-tauri/src/lib.rs`): `msp_debug_connect` and `msp_debug_disconnect` manage the TCP debug connection. `msp_attitude_poll` requests MSP v2 function `0x0455`, while `msp_pid_poll` requests `0x0451`; both validate CRC8-DVB-S2 frames and use a 500 ms TCP timeout. Firmware retains the legacy combined `0x0450` response for configurator v0.1.7 and older, but current code does not request it.
 
 **3D rendering**: Three.js via `three` npm package. `initDebugAircraftView()` sets up a WebGL renderer with a fallback procedural aircraft model plus GLTF loading (`/models/model_rudderless_plane.gltf`). Aircraft attitude is updated from MSP debug samples.
 

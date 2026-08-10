@@ -151,7 +151,7 @@ app/
 ```
 
 - **前端** — 原生 JavaScript，无框架。单一 `state` 对象驱动，`render()` 全量替换 DOM。
-- **后端 (Rust)** — 三个 Tauri 命令: `msp_debug_connect` / `msp_debug_disconnect` / `msp_debug_poll`。MSP v2 帧编解码 + CRC8-DVB-S2 校验。
+- **后端 (Rust)** — 通过 `msp_debug_connect` / `msp_debug_disconnect` 管理 TCP 连接，使用 `msp_attitude_poll`（`0x0455`）轮询姿态，并使用 `msp_pid_poll`（`0x0451`）轮询 PID 数据。固件继续保留旧的 MSP `0x0450` 合并响应，以兼容 v0.1.7 及更早版本的配置器。
 - **3D 渲染** — Three.js，程序化备用模型 + GLTF 加载。
 - **代理** — Vite 中间件 `/__elrs_proxy__/` 将浏览器请求转发至设备 HTTP API。
 
