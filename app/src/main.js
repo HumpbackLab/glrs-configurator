@@ -125,12 +125,13 @@ const state = {
 let debugPollTimer = null;
 let debugPollInFlight = false;
 let debugPollGeneration = 0;
+let mspDebugConnected = false;
+let mspDebugConnectPromise = null;
 let debugAircraftView = null;
 let pwmRuntimeUpdateTimer = null;
 let pwmRuntimeUpdateInFlight = false;
 let pwmRuntimePendingValues = null;
 let pidLiveRateWindow = [];
-let pidLiveOwnsDebugPolling = false;
 let connectionHealthTimer = null;
 let connectionHealthInFlight = false;
 let connectionHealthFailures = 0;
@@ -1347,9 +1348,23 @@ async function saveHomeNetwork(event) {
 }
 
 async function postPlain(path, successText) {
+  if (state.busy) return;
   await runBusy(async () => {
     await apiFetch(path, {method: 'POST', body: new FormData()});
   }, successText);
+}
+
+async function rebootDevice() {
+  if (state.busy) return;
+  await runBusy(async () => {
+    // Older receiver firmware labels its plain-text reboot acknowledgement as
+    // JSON. xhrRequest deliberately tolerates that legacy response.
+    await xhrRequest('/reboot', {method: 'POST', body: new FormData(), timeout: 3000});
+    // Keep the action locked while the old device instance is shutting down.
+    // This prevents repeated software resets if the user clicks again before
+    // the receiver has had a chance to boot and resume ELRS reception.
+    await new Promise((resolve) => window.setTimeout(resolve, 1500));
+  }, t('message.rebootRequested'));
 }
 
 async function uploadFirmwareFile(file) {
@@ -2543,7 +2558,7 @@ function renderRuntime() {
         <div class="row"><label for="rcvr-uart-baud">${t('runtime.uartBaud')}</label><input id="rcvr-uart-baud" name="rcvr-uart-baud" value="${escapeHtml(optionValue('rcvr-uart-baud', runtimeDefaults['rcvr-uart-baud']))}" inputmode="numeric"></div>
         <div class="check"><input id="lock-on-first-connection" name="lock-on-first-connection" type="checkbox" ${checked(optionValue('lock-on-first-connection', runtimeDefaults['lock-on-first-connection']))}><label for="lock-on-first-connection">${t('runtime.lockOnFirst')}</label></div>
         <div class="check"><input id="is-airport" name="is-airport" type="checkbox" ${checked(optionValue('is-airport', runtimeDefaults['is-airport']))}><label for="is-airport">${t('runtime.airport')}</label></div>
-        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot">${t('action.reboot')}</button></div>
+        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot" ${state.busy ? 'disabled' : ''}>${t('action.reboot')}</button></div>
       </form>
     </section>`;
 }
@@ -3432,27 +3447,28 @@ function capturePidPollSample(sample) {
 
 async function startPidLive() {
   if (state.pidLiveReceiving) return;
+  if (!state.debugPolling) state.debugSample = null;
   state.pidLiveReceiving = true;
   state.pidLiveStarting = true;
   state.pidLogError = '';
-  pidLiveOwnsDebugPolling = !state.debugPolling;
   render();
-  if (pidLiveOwnsDebugPolling && !(await startDebugPolling())) {
+  try {
+    await ensureMspDebugConnection();
+    await pollDebugOnce();
+    scheduleDebugPoll();
+  } catch (error) {
     state.pidLiveReceiving = false;
-    state.pidLogError = state.debugError;
+    state.pidLogError = error.message || String(error);
   }
   state.pidLiveStarting = false;
-  pidLiveOwnsDebugPolling = state.pidLiveReceiving && pidLiveOwnsDebugPolling;
   render();
 }
 
 async function stopPidLive() {
   state.pidLiveReceiving = false;
   state.pidLiveStarting = false;
-  const stopOwnedPolling = pidLiveOwnsDebugPolling;
-  pidLiveOwnsDebugPolling = false;
-  if (stopOwnedPolling) await stopDebugPolling();
-  else render();
+  await stopMspDebugConnectionIfIdle();
+  render();
 }
 
 function clearPidLive() {
@@ -3841,29 +3857,62 @@ function wirePwmForm() {
   syncSerial2Visibility();
 }
 
+function mspPollingActive() {
+  return state.debugPolling || state.pidLiveReceiving;
+}
+
+async function ensureMspDebugConnection() {
+  if (mspDebugConnected) return;
+  if (!mspDebugConnectPromise) {
+    mspDebugConnectPromise = tauriInvoke('msp_debug_connect', {apiBase: state.apiBase})
+      .then(() => { mspDebugConnected = true; })
+      .finally(() => { mspDebugConnectPromise = null; });
+  }
+  await mspDebugConnectPromise;
+}
+
 async function pollDebugOnce() {
   if (debugPollInFlight) return;
   const generation = debugPollGeneration;
   debugPollInFlight = true;
   try {
-    const sample = await tauriInvoke('msp_debug_poll');
-    if (generation !== debugPollGeneration || !state.debugPolling) return;
-    if (!sample) return;
-    state.debugSample = sample;
-    state.debugError = '';
-    capturePidPollSample(sample);
-    updateDebugView();
-  } catch (error) {
-    if (generation !== debugPollGeneration || !state.debugPolling) return;
-    state.debugError = error.message || String(error);
-    updateDebugView();
+    if (state.debugPolling) {
+      try {
+        const imuSample = await tauriInvoke('msp_imu_poll');
+        if (generation !== debugPollGeneration || !state.debugPolling) return;
+        if (imuSample) {
+          state.debugSample = imuSample;
+          state.debugError = '';
+          updateDebugView();
+        }
+      } catch (error) {
+        if (generation === debugPollGeneration && state.debugPolling) {
+          state.debugError = error.message || String(error);
+          updateDebugView();
+        }
+      }
+    }
+    if (state.pidLiveReceiving) {
+      try {
+        const pidSample = await tauriInvoke('msp_pid_poll');
+        if (generation !== debugPollGeneration || !state.pidLiveReceiving) return;
+        if (pidSample) {
+          state.pidLogError = '';
+          capturePidPollSample(pidSample);
+        }
+      } catch (error) {
+        if (generation === debugPollGeneration && state.pidLiveReceiving) {
+          state.pidLogError = error.message || String(error);
+        }
+      }
+    }
   } finally {
     debugPollInFlight = false;
   }
 }
 
 function scheduleDebugPoll() {
-  if (!state.debugPolling || debugPollTimer) return;
+  if (!mspPollingActive() || debugPollTimer) return;
   const intervalMs = Math.max(20, Math.round(1000 / state.debugPollRateHz));
   debugPollTimer = window.setTimeout(async () => {
     debugPollTimer = null;
@@ -3875,11 +3924,11 @@ function scheduleDebugPoll() {
 async function startDebugPolling() {
   state.debugPollRateHz = intOrDefault(document.querySelector('#debug-poll-rate')?.value, 20);
   state.debugError = '';
+  state.debugPolling = true;
+  render();
   try {
-    await tauriInvoke('msp_debug_connect', {apiBase: state.apiBase});
+    await ensureMspDebugConnection();
     debugPollGeneration += 1;
-    state.debugPolling = true;
-    render();
     await pollDebugOnce();
     scheduleDebugPoll();
     return true;
@@ -3892,21 +3941,25 @@ async function startDebugPolling() {
 }
 
 async function stopDebugPolling(disconnect = true) {
+  state.debugPolling = false;
+  await stopMspDebugConnectionIfIdle(disconnect);
+  render();
+}
+
+async function stopMspDebugConnectionIfIdle(disconnect = true) {
+  if (mspPollingActive()) return;
   debugPollGeneration += 1;
   if (debugPollTimer) {
     window.clearTimeout(debugPollTimer);
     debugPollTimer = null;
   }
-  state.debugPolling = false;
-  state.pidLiveReceiving = false;
-  state.pidLiveStarting = false;
-  pidLiveOwnsDebugPolling = false;
-  render();
-  if (disconnect) {
+  if (disconnect && mspDebugConnected) {
     try {
       await tauriInvoke('msp_debug_disconnect');
     } catch {
       // Browser preview has no Tauri backend.
+    } finally {
+      mspDebugConnected = false;
     }
   }
 }
@@ -4089,7 +4142,7 @@ function wireEvents() {
     button.addEventListener('click', () => {
       const action = button.dataset.action;
       if (action === 'refresh') void connectDevice(t('message.refreshed'));
-      if (action === 'reboot') postPlain('/reboot', t('message.rebootRequested'));
+      if (action === 'reboot') void rebootDevice();
       if (action === 'reset-model') postPlain('/reset?model', t('message.modelReset'));
       if (action === 'reset-hardware') postPlain('/reset?hardware', t('message.hardwareReset'));
       if (action === 'scan') scanNetworks();
