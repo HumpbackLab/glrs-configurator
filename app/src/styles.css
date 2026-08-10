@@ -1723,11 +1723,33 @@ button:disabled {
 
 .imu-cal-status { margin: 0; }
 
+.imu-cal-results {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.imu-cal-results > div {
+  min-width: 0;
+}
+
+.imu-cal-results > div > strong {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
 @keyframes imu-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .calibrating-overlay span { animation: none; }
+}
 
 @media (max-width: 800px) {
   .imu-live-groups,
-  .imu-calibration-grid { grid-template-columns: 1fr; }
+  .imu-calibration-grid,
+  .imu-cal-results { grid-template-columns: 1fr; }
 }
 
 /* ---- PID live charts ---- */

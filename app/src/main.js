@@ -69,6 +69,13 @@ const state = {
   eulerPitch: 0,
   eulerYaw: 0,
   orientationCal: null,
+  imuCalibration: {
+    busy: '',
+    accelFaces: Array(6).fill(null),
+    accelBias: null,
+    accelScale: null,
+    gyroBias: null,
+  },
   debugSample: null,
   debugError: '',
   debugPolling: false,
@@ -745,6 +752,13 @@ async function loadDevice() {
   connectionHealthFailures = 0;
   state.configResponse = configResponse;
   state.hardware = hardwareResponse;
+  state.imuCalibration = {
+    busy: '',
+    accelFaces: Array(6).fill(null),
+    accelBias: null,
+    accelScale: null,
+    gyroBias: null,
+  };
   const currentFirmwareVersion = (target?.version || '').split(/\s+/, 1)[0];
   const hasDownloadedFirmware = state.firmwareUpdate.status === 'downloaded'
     && Boolean(state.firmwareUpdate.path)
@@ -1042,6 +1056,18 @@ async function saveFlight(event) {
     nextConfig.fc_mixer = readNumGrid(form, 'fc_mixer', motorCount(), 4);
     nextConfig.fc_mixer_servos = readMixerServos(form, motorCount());
     nextConfig.fc_orientation = orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw);
+    nextConfig.fc_gyro_bias = readNumGrid(form, 'fc_gyro_bias', 1, 3);
+    nextConfig.fc_accel_bias = readNumGrid(form, 'fc_accel_bias', 1, 3);
+    nextConfig.fc_accel_scale = readNumGrid(form, 'fc_accel_scale', 1, 3);
+    if (nextConfig.fc_gyro_bias.some((value) => Math.abs(value) > 100)) {
+      throw new Error(t('error.gyroBiasRange'));
+    }
+    if (nextConfig.fc_accel_bias.some((value) => Math.abs(value) > 20)) {
+      throw new Error(t('error.accelBiasRange'));
+    }
+    if (nextConfig.fc_accel_scale.some((value) => value <= 0.5 || value >= 1.5)) {
+      throw new Error(t('error.accelScaleRange'));
+    }
     delete nextConfig.pwm;
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(nextConfig)});
     if (state.profileDraft) {
@@ -1100,29 +1126,143 @@ function normalizeCardinalAngle(degrees) {
 }
 
 async function sampleRawAccel(sampleCount = 24, delayMs = 40) {
-  const sum = [0, 0, 0];
-  let valid = 0;
+  const sample = await sampleRawImu('accel', sampleCount, delayMs);
+  return normalizeVector(sample.mean);
+}
+
+async function sampleRawImu(sensor, sampleCount, delayMs, frame = 'raw') {
+  const samples = [];
+  let transformedFrameAvailable = false;
   for (let i = 0; i < sampleCount; i += 1) {
     const status = await apiFetch('/status.json', {timeout: 2000});
     const imu = status?.imu || {};
-    const accel = imu['accel-mps2'];
-    if (imu['accel-valid'] && accel) {
-      const x = Number(accel.x);
-      const y = Number(accel.y);
-      const z = Number(accel.z);
+    if (imu['tf-frame'] === 'aircraft') transformedFrameAvailable = true;
+    const key = `${frame === 'tf' ? 'tf-' : ''}${sensor === 'gyro' ? 'gyro-dps' : 'accel-mps2'}`;
+    const value = imu[key];
+    const valid = sensor === 'gyro' ? imu['gyro-ready'] : imu['accel-valid'];
+    if (valid && value) {
+      const x = Number(value.x);
+      const y = Number(value.y);
+      const z = Number(value.z);
       if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-        sum[0] += x;
-        sum[1] += y;
-        sum[2] += z;
-        valid += 1;
+        samples.push([x, y, z]);
       }
     }
     if (i + 1 < sampleCount) await sleep(delayMs);
   }
-  if (valid < Math.ceil(sampleCount * 0.75)) {
-    throw new Error(t('error.notEnoughSamples'));
+  if (frame === 'tf' && !transformedFrameAvailable) {
+    throw new Error(t('error.tfImuUnavailable'));
   }
-  return normalizeVector(sum.map((value) => value / valid));
+  if (samples.length < Math.ceil(sampleCount * 0.75)) {
+    throw new Error(t('error.notEnoughImuSamples'));
+  }
+  const mean = [0, 1, 2].map((axis) => samples.reduce((sum, value) => sum + value[axis], 0) / samples.length);
+  const stddev = [0, 1, 2].map((axis) => Math.sqrt(samples.reduce((sum, value) => {
+    const delta = value[axis] - mean[axis];
+    return sum + delta * delta;
+  }, 0) / samples.length));
+  const range = [0, 1, 2].map((axis) => {
+    const values = samples.map((value) => value[axis]);
+    return Math.max(...values) - Math.min(...values);
+  });
+  return {mean, stddev, range, count: samples.length};
+}
+
+const STANDARD_GRAVITY = 9.80665;
+const ACCEL_CAL_FACES = [
+  {axis: 0, sign: 1, label: 'imuCalibration.faceXPos'},
+  {axis: 0, sign: -1, label: 'imuCalibration.faceXNeg'},
+  {axis: 1, sign: 1, label: 'imuCalibration.faceYPos'},
+  {axis: 1, sign: -1, label: 'imuCalibration.faceYNeg'},
+  {axis: 2, sign: 1, label: 'imuCalibration.faceZPos'},
+  {axis: 2, sign: -1, label: 'imuCalibration.faceZNeg'},
+];
+
+function roundedImuVector(values) {
+  return values.map((value) => Number(value.toFixed(6)));
+}
+
+function calculateAccelCalibration(faces) {
+  const bias = [];
+  const scale = [];
+  for (let axis = 0; axis < 3; axis += 1) {
+    const positive = faces[axis * 2].mean[axis];
+    const negative = faces[axis * 2 + 1].mean[axis];
+    const span = positive - negative;
+    const nextScale = (2 * STANDARD_GRAVITY) / span;
+    if (!Number.isFinite(nextScale) || nextScale <= 0.5 || nextScale >= 1.5) {
+      throw new Error(t('error.accelCalibrationRange'));
+    }
+    bias.push((positive + negative) / 2);
+    scale.push(nextScale);
+  }
+  return {bias: roundedImuVector(bias), scale: roundedImuVector(scale)};
+}
+
+async function captureAccelFace(index) {
+  if (state.busy || state.imuCalibration.busy) return;
+  const face = ACCEL_CAL_FACES[index];
+  state.imuCalibration.busy = `accel-${index}`;
+  render();
+  try {
+    const sample = await sampleRawImu('accel', 32, 35, 'tf');
+    const magnitude = vectorLength(sample.mean);
+    const crossMagnitude = Math.hypot(...sample.mean.filter((_, axis) => axis !== face.axis));
+    if (Math.max(...sample.stddev) > 0.35 || Math.max(...sample.range) > 1.5) {
+      throw new Error(t('error.imuMoved'));
+    }
+    if (magnitude < 7.5 || magnitude > 12.2) {
+      throw new Error(t('error.accelMagnitude'));
+    }
+    if (sample.mean[face.axis] * face.sign < 7.0 || crossMagnitude > 4.5) {
+      throw new Error(t('error.wrongAccelFace', {face: t(face.label)}));
+    }
+    state.imuCalibration.accelFaces[index] = sample;
+    if (state.imuCalibration.accelFaces.every(Boolean)) {
+      const result = calculateAccelCalibration(state.imuCalibration.accelFaces);
+      state.imuCalibration.accelBias = result.bias;
+      state.imuCalibration.accelScale = result.scale;
+      state.message = {type: 'ok', text: t('imuCalibration.accelComplete')};
+    } else {
+      state.message = {type: 'ok', text: t('imuCalibration.faceCaptured', {face: t(face.label)})};
+    }
+  } catch (error) {
+    state.message = {type: 'error', text: error.message || String(error)};
+  } finally {
+    state.imuCalibration.busy = '';
+    render();
+  }
+}
+
+async function calibrateGyro() {
+  if (state.busy || state.imuCalibration.busy) return;
+  state.imuCalibration.busy = 'gyro';
+  render();
+  try {
+    const sample = await sampleRawImu('gyro', 64, 30, 'tf');
+    if (Math.max(...sample.stddev) > 0.8 || Math.max(...sample.range) > 4.0) {
+      throw new Error(t('error.gyroMoved'));
+    }
+    if (sample.mean.some((value) => Math.abs(value) > 100)) {
+      throw new Error(t('error.gyroBiasRange'));
+    }
+    state.imuCalibration.gyroBias = roundedImuVector(sample.mean);
+    state.message = {type: 'ok', text: t('imuCalibration.gyroComplete')};
+  } catch (error) {
+    state.message = {type: 'error', text: error.message || String(error)};
+  } finally {
+    state.imuCalibration.busy = '';
+    render();
+  }
+}
+
+function resetAccelCalibration() {
+  if (state.imuCalibration.busy) return;
+  state.imuCalibration.accelFaces = Array(6).fill(null);
+  state.imuCalibration.accelBias = null;
+  state.imuCalibration.accelScale = null;
+  state.message = null;
+  render();
 }
 
 function orientationEulerFromSamples(levelRaw, forwardRaw) {
@@ -2691,6 +2831,57 @@ function boardPreviewTransform(roll, pitch, yaw) {
   return `rotateZ(${-yaw}deg) rotateY(${roll}deg) rotateX(${pitch}deg)`;
 }
 
+function renderImuCalibration() {
+  const calibration = state.imuCalibration;
+  const completed = calibration.accelFaces.filter(Boolean).length;
+  const nextFace = calibration.accelFaces.findIndex((sample) => !sample);
+  const gyroBias = calibration.gyroBias || configValue('fc_gyro_bias', [0, 0, 0]);
+  const accelBias = calibration.accelBias || configValue('fc_accel_bias', [0, 0, 0]);
+  const accelScale = calibration.accelScale || configValue('fc_accel_scale', [1, 1, 1]);
+  const busy = Boolean(calibration.busy);
+  const faceButtons = ACCEL_CAL_FACES.map((face, index) => {
+    const done = Boolean(calibration.accelFaces[index]);
+    const classes = ['imu-face-button', done ? 'is-done' : '', index === nextFace ? 'is-next' : ''].filter(Boolean).join(' ');
+    return `<button class="${classes}" type="button" data-action="accel-face" data-face="${index}" ${state.busy || busy ? 'disabled' : ''}>
+      <span>${done ? '✓' : index + 1}</span><strong>${escapeHtml(t(face.label))}</strong><small>${escapeHtml(t('imuCalibration.captureFace'))}</small>
+    </button>`;
+  }).join('');
+  return `
+    <div class="row">
+      <label>${t('imuCalibration.heading')}</label>
+      <div class="notice">${t('imuCalibration.safety')}</div>
+      <div class="imu-calibration-grid">
+        <section class="imu-cal-card ${calibration.busy.startsWith('accel-') ? 'is-calibrating' : ''}">
+          <div class="imu-card-heading">
+            <div><h3>${t('imuCalibration.accelTitle')}</h3><p>${t('imuCalibration.accelDescription')}</p></div>
+            <span class="cal-progress">${t('imuCalibration.progress', {done: completed})}</span>
+          </div>
+          <div class="imu-step-hint">${nextFace >= 0
+            ? t('imuCalibration.nextFace', {face: t(ACCEL_CAL_FACES[nextFace].label)})
+            : t('imuCalibration.accelReady')}</div>
+          <div class="imu-face-actions">${faceButtons}</div>
+          <div class="actions"><button class="secondary" type="button" data-action="accel-reset" ${state.busy || busy ? 'disabled' : ''}>${t('imuCalibration.resetAccel')}</button></div>
+          ${calibration.busy.startsWith('accel-') ? `<div class="calibrating-overlay" role="status" aria-live="polite"><span aria-hidden="true"></span>${t('imuCalibration.sampling')}</div>` : ''}
+        </section>
+        <section class="imu-cal-card ${calibration.busy === 'gyro' ? 'is-calibrating' : ''}">
+          <div class="imu-card-heading">
+            <div><h3>${t('imuCalibration.gyroTitle')}</h3><p>${t('imuCalibration.gyroDescription')}</p></div>
+            ${calibration.gyroBias ? `<span class="cal-ready">${t('imuCalibration.ready')}</span>` : ''}
+          </div>
+          <div class="gyro-still-visual"><div class="gyro-icon" aria-hidden="true">⊕</div><strong>${t('imuCalibration.keepStill')}</strong><small>${t('imuCalibration.gyroDuration')}</small></div>
+          <div class="actions"><button class="secondary" type="button" data-action="gyro-calibrate" ${state.busy || busy ? 'disabled' : ''}>${t('imuCalibration.startGyro')}</button></div>
+          ${calibration.busy === 'gyro' ? `<div class="calibrating-overlay" role="status" aria-live="polite"><span aria-hidden="true"></span>${t('imuCalibration.sampling')}</div>` : ''}
+        </section>
+      </div>
+      <div class="imu-cal-results">
+        <div><strong>${t('imuCalibration.gyroBias')}</strong>${renderNumGrid('fc_gyro_bias', [t('imuCalibration.offset')], ['X', 'Y', 'Z'], gyroBias, {rowHeader: t('flight.axis')})}</div>
+        <div><strong>${t('imuCalibration.accelBias')}</strong>${renderNumGrid('fc_accel_bias', [t('imuCalibration.offset')], ['X', 'Y', 'Z'], accelBias, {rowHeader: t('flight.axis')})}</div>
+        <div><strong>${t('imuCalibration.accelScale')}</strong>${renderNumGrid('fc_accel_scale', [t('imuCalibration.scale')], ['X', 'Y', 'Z'], accelScale, {rowHeader: t('flight.axis')})}</div>
+      </div>
+      <div class="helper">${t('imuCalibration.saveHelp')}</div>
+    </div>`;
+}
+
 function renderFlight() {
   const motors = motorCount();
   const ratePid = flightConfigValue('fc_rate_pid', []);
@@ -2819,11 +3010,12 @@ function renderFlight() {
             <div class="matrix-display">${escapeHtml(matrixText)}</div>
             <div class="helper">${escapeHtml(orientationCalText())}</div>
             <div class="actions">
-              <button class="secondary" type="button" data-action="quick-orientation" ${state.busy ? 'disabled' : ''}>${escapeHtml(orientationCalButtonText())}</button>
+              <button class="secondary" type="button" data-action="quick-orientation" ${state.busy || state.imuCalibration.busy ? 'disabled' : ''}>${escapeHtml(orientationCalButtonText())}</button>
             </div>
           </div>
         </div>
-        <div class="actions"><button class="primary" ${state.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot">${t('action.reboot')}</button></div>
+        ${renderImuCalibration()}
+        <div class="actions"><button class="primary" ${state.busy || state.imuCalibration.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot" ${state.busy || state.imuCalibration.busy ? 'disabled' : ''}>${t('action.reboot')}</button></div>
       </form>
     </section>`;
 }
@@ -3907,6 +4099,9 @@ function wireEvents() {
       if (action === 'add-motor') changeMixerRowCount(1);
       if (action === 'remove-motor') changeMixerRowCount(-1);
       if (action === 'quick-orientation') quickOrientationStep();
+      if (action === 'accel-face') void captureAccelFace(Number(button.dataset.face));
+      if (action === 'accel-reset') resetAccelCalibration();
+      if (action === 'gyro-calibrate') void calibrateGyro();
       if (action === 'debug-start') startDebugPolling();
       if (action === 'debug-stop') stopDebugPolling();
       if (action === 'pidlive-start') void startPidLive();
