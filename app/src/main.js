@@ -83,8 +83,8 @@ const state = {
   pidLogVisible: {},
   pidLogRaw: null,
   pidLiveReceiving: false,
+  pidLiveStarting: false,
   pidLivePackets: 0,
-  pidLiveLost: 0,
   pidLiveDuplicates: 0,
   pidLiveLastSequence: null,
   pidLiveRateHz: 0,
@@ -122,8 +122,8 @@ let debugAircraftView = null;
 let pwmRuntimeUpdateTimer = null;
 let pwmRuntimeUpdateInFlight = false;
 let pwmRuntimePendingValues = null;
-let pidLiveTimer = null;
 let pidLiveRateWindow = [];
+let pidLiveOwnsDebugPolling = false;
 let connectionHealthTimer = null;
 let connectionHealthInFlight = false;
 let connectionHealthFailures = 0;
@@ -2889,10 +2889,9 @@ function pidChartDefinitions() {
 }
 
 function pidSamplesForDisplay() {
-  if (state.pidLogMode === 'angle') return state.pidLogSamples.filter((sample) => sample.mode === 2);
-  // Rate targets and states remain meaningful while ANGLE mode is active, so
-  // the angular-rate view includes samples produced by both control modes.
-  return state.pidLogSamples.filter((sample) => sample.mode === 1 || sample.mode === 2);
+  // MSP polling is explicitly started by the user. Keep every returned sample
+  // so waveform playback no longer depends on the CH6 flight-mode position.
+  return state.pidLogSamples;
 }
 
 function pidChartView(key) {
@@ -3032,10 +3031,10 @@ function renderPidLegend(series) {
 function renderPidLog() {
   return `<div class="pid-log-layout">
     <section class="panel">
-      <div class="panel-heading"><div><h2>PID 波形</h2><div class="helper">监听 UDP 14580；曲线按实际收到的数据点连接，不补点、不插值。</div></div></div>
-      <div class="actions"><button class="primary" type="button" data-action="pidlive-${state.pidLiveReceiving ? 'stop' : 'start'}">${state.pidLiveReceiving ? '暂停接收' : '开始接收'}</button><button class="secondary" type="button" data-action="pidlive-clear">清空当前数据</button><button class="secondary" type="button" data-action="pidlive-save" ${state.pidLogSamples.length ? '' : 'disabled'}>保存原始数据</button></div>
+      <div class="panel-heading"><div><h2>PID 波形</h2><div class="helper">点击开始采集后通过 MSP 主动轮询飞控；无需切换 CH6，曲线不补点、不插值。</div></div></div>
+      <div class="actions"><button class="primary" type="button" data-action="pidlive-${state.pidLiveReceiving ? 'stop' : 'start'}" ${state.pidLiveStarting ? 'disabled' : ''}>${state.pidLiveStarting ? '连接中…' : state.pidLiveReceiving ? '停止采集' : '开始采集'}</button><button class="secondary" type="button" data-action="pidlive-clear">清空当前数据</button><button class="secondary" type="button" data-action="pidlive-save" ${state.pidLogSamples.length ? '' : 'disabled'}>保存原始数据</button></div>
       ${state.pidLogError ? `<div class="message error">${escapeHtml(state.pidLogError)}</div>` : ''}
-      <div class="metrics"><div class="metric"><span>接收频率</span><strong id="pid-live-rate">${state.pidLiveRateHz.toFixed(1)} Hz</strong></div><div class="metric"><span>数据点</span><strong id="pid-live-packets">${state.pidLivePackets.toLocaleString()}</strong></div><div class="metric"><span>UDP 丢包</span><strong id="pid-live-lost">${state.pidLiveLost.toLocaleString()}</strong></div><div class="metric"><span>重复包</span><strong id="pid-live-duplicates">${state.pidLiveDuplicates.toLocaleString()}</strong></div></div>
+      <div class="metrics"><div class="metric"><span>轮询频率</span><strong id="pid-live-rate">${state.pidLiveRateHz.toFixed(1)} Hz</strong></div><div class="metric"><span>数据点</span><strong id="pid-live-packets">${state.pidLivePackets.toLocaleString()}</strong></div><div class="metric"><span>重复帧</span><strong id="pid-live-duplicates">${state.pidLiveDuplicates.toLocaleString()}</strong></div></div>
       <div class="pid-time-controls">
         <label>显示时间窗口 <select id="pid-live-window">${![0, 5, 10, 30].includes(state.pidLiveWindowSeconds) ? `<option value="${state.pidLiveWindowSeconds}" selected>${state.pidLiveWindowSeconds.toFixed(2)} s</option>` : ''}<option value="5" ${state.pidLiveWindowSeconds === 5 ? 'selected' : ''}>5 s</option><option value="10" ${state.pidLiveWindowSeconds === 10 ? 'selected' : ''}>10 s</option><option value="30" ${state.pidLiveWindowSeconds === 30 ? 'selected' : ''}>30 s</option><option value="0" ${state.pidLiveWindowSeconds === 0 ? 'selected' : ''}>全部</option></select></label>
         <span id="pid-window-label">${state.pidLiveWindowSeconds ? `${state.pidLiveWindowSeconds.toFixed(2)} s` : '全部'}</span>
@@ -3118,7 +3117,6 @@ function updatePidLiveView(redraw = true) {
   const values = {
     'pid-live-rate': `${state.pidLiveRateHz.toFixed(1)} Hz`,
     'pid-live-packets': state.pidLivePackets.toLocaleString(),
-    'pid-live-lost': state.pidLiveLost.toLocaleString(),
     'pid-live-duplicates': state.pidLiveDuplicates.toLocaleString(),
   };
   Object.entries(values).forEach(([id, value]) => {
@@ -3203,45 +3201,70 @@ function leavePidChart(event) {
   drawPidCharts();
 }
 
-async function pollPidLive() {
-  if (!state.pidLiveReceiving) return;
-  try {
-    const samples = await tauriInvoke('pid_udp_poll');
-    const now = performance.now();
-    for (const sample of samples) {
-      if (state.pidLiveLastSequence !== null) {
-        const delta = (sample.sequence - state.pidLiveLastSequence) >>> 0;
-        if (delta === 0) { state.pidLiveDuplicates += 1; continue; }
-        if (delta > 1 && delta < 0x80000000) state.pidLiveLost += delta - 1;
-      }
-      state.pidLiveLastSequence = sample.sequence;
-      state.pidLivePackets += 1;
-      state.pidLogSamples.push({...sample, timeUs: sample.timestampMs * 1000});
-      pidLiveRateWindow.push(now);
-    }
-    pidLiveRateWindow = pidLiveRateWindow.filter((time) => now - time <= 1000);
-    state.pidLiveRateHz = pidLiveRateWindow.length;
-    updatePidLiveView(samples.length > 0);
-    if (samples.length) { pidLiveTimer = window.setTimeout(pollPidLive, 20); return; }
-  } catch (error) { state.pidLogError = error.message || String(error); await stopPidLive(); render(); return; }
-  pidLiveTimer = window.setTimeout(pollPidLive, 20);
+function capturePidPollSample(sample) {
+  if (!state.pidLiveReceiving || !sample) return;
+  const timestampMs = Number(sample.timestamp_ms);
+  if (!Number.isFinite(timestampMs)) return;
+  if (state.pidLiveLastSequence === timestampMs) {
+    state.pidLiveDuplicates += 1;
+    updatePidLiveView(false);
+    return;
+  }
+
+  state.pidLiveLastSequence = timestampMs;
+  state.pidLivePackets += 1;
+  state.pidLogSamples.push({
+    sequence: state.pidLivePackets,
+    timeUs: timestampMs * 1000,
+    timestampMs,
+    mode: Number(sample.mode),
+    loopTimeUs: Number(sample.loop_time_us),
+    armed: Boolean(sample.armed),
+    angleRollTarget: Number(sample.angle_roll_target),
+    anglePitchTarget: Number(sample.angle_pitch_target),
+    angleRollState: Number(sample.roll_deg),
+    anglePitchState: Number(sample.pitch_deg),
+    rateRollTarget: Number(sample.rate_roll_target),
+    ratePitchTarget: Number(sample.rate_pitch_target),
+    rateYawTarget: Number(sample.rate_yaw_target),
+    rateRollState: Number(sample.gyro_x_dps),
+    ratePitchState: Number(sample.gyro_y_dps),
+    rateYawState: Number(sample.gyro_z_dps),
+  });
+  const now = performance.now();
+  pidLiveRateWindow.push(now);
+  pidLiveRateWindow = pidLiveRateWindow.filter((time) => now - time <= 1000);
+  state.pidLiveRateHz = pidLiveRateWindow.length;
+  updatePidLiveView(true);
 }
 
 async function startPidLive() {
-  try { await tauriInvoke('pid_udp_start'); state.pidLiveReceiving = true; state.pidLogError = ''; pollPidLive(); }
-  catch (error) { state.pidLogError = error.message || String(error); }
+  if (state.pidLiveReceiving) return;
+  state.pidLiveReceiving = true;
+  state.pidLiveStarting = true;
+  state.pidLogError = '';
+  pidLiveOwnsDebugPolling = !state.debugPolling;
+  render();
+  if (pidLiveOwnsDebugPolling && !(await startDebugPolling())) {
+    state.pidLiveReceiving = false;
+    state.pidLogError = state.debugError;
+  }
+  state.pidLiveStarting = false;
+  pidLiveOwnsDebugPolling = state.pidLiveReceiving && pidLiveOwnsDebugPolling;
   render();
 }
 
 async function stopPidLive() {
   state.pidLiveReceiving = false;
-  if (pidLiveTimer) window.clearTimeout(pidLiveTimer);
-  pidLiveTimer = null;
-  try { await tauriInvoke('pid_udp_stop'); } catch (_) { /* already stopped */ }
+  state.pidLiveStarting = false;
+  const stopOwnedPolling = pidLiveOwnsDebugPolling;
+  pidLiveOwnsDebugPolling = false;
+  if (stopOwnedPolling) await stopDebugPolling();
+  else render();
 }
 
 function clearPidLive() {
-  state.pidLogSamples = []; state.pidLivePackets = 0; state.pidLiveLost = 0; state.pidLiveDuplicates = 0;
+  state.pidLogSamples = []; state.pidLivePackets = 0; state.pidLiveDuplicates = 0;
   state.pidLiveLastSequence = null; state.pidLiveRateHz = 0; state.pidChartViews = {}; state.pidChartHover = {};
   pidLiveRateWindow = []; render();
 }
@@ -3389,10 +3412,10 @@ function renderDebugImu() {
   const sample = state.debugSample;
   return `<div class="imu-live-section debug-imu-row">
     <div class="imu-live-card">
-      <div class="imu-card-heading"><div><h3>IMU 实时数据</h3><p>通过 MSP 调试轮询查询；陀螺仪为固件上电校准后的数据</p></div><span class="imu-live-dot">MSP</span></div>
+      <div class="imu-card-heading"><div><h3>IMU 实时数据</h3><p>通过 MSP 调试轮询查询；数据已经过飞控正方向 TF 变换</p></div><span class="imu-live-dot">MSP</span></div>
       <div class="imu-live-groups">
-        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>陀螺仪</span><small>校准后角速度</small></div><div class="imu-axis-grid" id="debug-imu-gyro">${formatImuVector([sample?.gyro_x_dps, sample?.gyro_y_dps, sample?.gyro_z_dps], '°/s')}</div></div>
-        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>加速度计</span><small>线加速度</small></div><div class="imu-axis-grid" id="debug-imu-accel">${formatImuVector([sample?.accel_x_mps2, sample?.accel_y_mps2, sample?.accel_z_mps2], 'm/s²')}</div></div>
+        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>陀螺仪</span><small>TF 后角速度</small></div><div class="imu-axis-grid" id="debug-imu-gyro">${formatImuVector([sample?.gyro_x_dps, sample?.gyro_y_dps, sample?.gyro_z_dps], '°/s')}</div></div>
+        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>加速度计</span><small>TF 后加速度</small></div><div class="imu-axis-grid" id="debug-imu-accel">${formatImuVector([sample?.accel_x_mps2, sample?.accel_y_mps2, sample?.accel_z_mps2], 'm/s²')}</div></div>
       </div>
     </div>
   </div>`;
@@ -3636,6 +3659,7 @@ async function pollDebugOnce() {
     if (!sample) return;
     state.debugSample = sample;
     state.debugError = '';
+    capturePidPollSample(sample);
     updateDebugView();
   } catch (error) {
     if (generation !== debugPollGeneration || !state.debugPolling) return;
@@ -3666,10 +3690,12 @@ async function startDebugPolling() {
     render();
     await pollDebugOnce();
     scheduleDebugPoll();
+    return true;
   } catch (error) {
     state.debugPolling = false;
     state.debugError = error.message || String(error);
     render();
+    return false;
   }
 }
 
@@ -3680,6 +3706,9 @@ async function stopDebugPolling(disconnect = true) {
     debugPollTimer = null;
   }
   state.debugPolling = false;
+  state.pidLiveReceiving = false;
+  state.pidLiveStarting = false;
+  pidLiveOwnsDebugPolling = false;
   render();
   if (disconnect) {
     try {
