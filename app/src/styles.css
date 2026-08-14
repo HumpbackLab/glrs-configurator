@@ -31,7 +31,7 @@ button {
 }
 
 button:disabled {
-  cursor: default;
+  cursor: not-allowed;
   opacity: 0.55;
 }
 
@@ -1430,6 +1430,7 @@ button:disabled {
 .pid-log-layout {
   display: grid;
   gap: 18px;
+  margin-top: 18px;
 }
 
 .pid-chart-panel {
@@ -1651,6 +1652,7 @@ button:disabled {
   align-items: center;
   background: #fff;
   border: 1px solid #d8e1e8;
+  border-radius: 6px;
   display: grid;
   gap: 2px 8px;
   grid-template-columns: 26px 1fr;
@@ -1672,12 +1674,21 @@ button:disabled {
   width: 24px;
 }
 
+.imu-face-button > span svg {
+  fill: none;
+  height: 15px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.5;
+  width: 15px;
+}
+
 .imu-face-button strong { font-size: 12px; }
 .imu-face-button small { color: #87909c; font-size: 10px; }
-.imu-face-button.is-next { border-color: #1f7a6d; box-shadow: 0 0 0 2px rgba(31, 122, 109, 0.12); }
+.imu-face-button.is-pending { border-style: dashed; }
 .imu-face-button.is-done { background: #edf8f5; border-color: #b8ddd5; }
 .imu-face-button.is-done > span { background: #1f7a6d; color: #fff; }
-.imu-face-button:disabled { opacity: 0.68; }
 
 .gyro-still-visual {
   align-items: center;
@@ -1911,3 +1922,33 @@ button:disabled {
 @media (max-width: 1100px) {
   .grid, .pid-log-layout { grid-template-columns: 1fr; }
 }
+
+.filter-config {
+  background: #f8fafc;
+  border: 1px solid #d8dee6;
+  border-radius: 8px;
+  margin: 14px 0;
+  overflow: hidden;
+}
+
+.filter-config-header {
+  background: #f2f5f8;
+  border-bottom: 1px solid #d8dee6;
+  padding: 14px 16px;
+}
+
+.filter-config-header h3 {
+  color: #253044;
+  font-size: 15px;
+  margin: 0 0 4px;
+}
+
+.filter-config-body { padding: 16px; }
+
+.filter-lpf-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.filter-lpf-grid .row { margin-bottom: 0; }

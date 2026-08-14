@@ -886,6 +886,12 @@ function configValue(key, fallback) {
   return value === undefined ? fallback : value;
 }
 
+function booleanConfigValue(value, fallback = false) {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === 'string') return value.toLowerCase() === 'true' || value === '1';
+  return value === true || value === 1;
+}
+
 function flightConfigValue(key, fallback) {
   const draft = state.profileDraft?.flight;
   if (draft && Object.hasOwn(draft, key)) return draft[key];
@@ -1036,7 +1042,8 @@ async function saveFlight(event) {
     if (armStart < 900 || armEnd > 2100 || armStart >= armEnd) throw new Error(`${t('message.invalidRange')}: ARM`);
     nextConfig.fc_arm_range = [armStart, armEnd];
     nextConfig.fc_rate_pid = readNumGrid(form, 'fc_rate_pid', 3, 4);
-    nextConfig.fc_angle_pid = readNumGrid(form, 'fc_angle_pid', 3, 4);
+    const angleEnabled = form.fc_angle_enabled.checked;
+    if (angleEnabled) nextConfig.fc_angle_pid = readNumGrid(form, 'fc_angle_pid', 3, 4);
     const dtermLpfHz = intOrDefault(form.fc_dterm_lpf_hz.value, 20);
     if (dtermLpfHz < 0 || dtermLpfHz > 100 || (dtermLpfHz > 0 && dtermLpfHz < 5)) {
       throw new Error(t('error.invalidDtermLpf'));
@@ -1050,17 +1057,21 @@ async function saveFlight(event) {
     nextConfig.fc_mixer = readNumGrid(form, 'fc_mixer', motorCount(), 4);
     nextConfig.fc_mixer_servos = readMixerServos(form, motorCount());
     nextConfig.fc_orientation = orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw);
-    nextConfig.fc_gyro_bias = readNumGrid(form, 'fc_gyro_bias', 1, 3);
-    nextConfig.fc_accel_bias = readNumGrid(form, 'fc_accel_bias', 1, 3);
-    nextConfig.fc_accel_scale = readNumGrid(form, 'fc_accel_scale', 1, 3);
-    if (nextConfig.fc_gyro_bias.some((value) => Math.abs(value) > 100)) {
-      throw new Error(t('error.gyroBiasRange'));
+    if (angleEnabled) {
+      nextConfig.fc_gyro_bias = readNumGrid(form, 'fc_gyro_bias', 1, 3);
+      nextConfig.fc_accel_bias = readNumGrid(form, 'fc_accel_bias', 1, 3);
+      nextConfig.fc_accel_scale = readNumGrid(form, 'fc_accel_scale', 1, 3);
     }
-    if (nextConfig.fc_accel_bias.some((value) => Math.abs(value) > 20)) {
-      throw new Error(t('error.accelBiasRange'));
-    }
-    if (nextConfig.fc_accel_scale.some((value) => value <= 0.5 || value >= 1.5)) {
-      throw new Error(t('error.accelScaleRange'));
+    if (angleEnabled) {
+      if (nextConfig.fc_gyro_bias.some((value) => Math.abs(value) > 100)) {
+        throw new Error(t('error.gyroBiasRange'));
+      }
+      if (nextConfig.fc_accel_bias.some((value) => Math.abs(value) > 20)) {
+        throw new Error(t('error.accelBiasRange'));
+      }
+      if (nextConfig.fc_accel_scale.some((value) => value <= 0.5 || value >= 1.5)) {
+        throw new Error(t('error.accelScaleRange'));
+      }
     }
     delete nextConfig.pwm;
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(nextConfig)});
@@ -1193,23 +1204,36 @@ function calculateAccelCalibration(faces) {
   return {bias: roundedImuVector(bias), scale: roundedImuVector(scale)};
 }
 
-async function captureAccelFace(index) {
+function detectAccelFace(mean) {
+  const absolute = mean.map(Math.abs);
+  const axis = absolute.indexOf(Math.max(...absolute));
+  const sign = mean[axis] >= 0 ? 1 : -1;
+  const index = ACCEL_CAL_FACES.findIndex((face) => face.axis === axis && face.sign === sign);
+  const crossMagnitude = Math.hypot(...mean.filter((_, candidateAxis) => candidateAxis !== axis));
+  if (index < 0 || absolute[axis] < 7.0 || crossMagnitude > 4.5) return -1;
+  return index;
+}
+
+async function captureCurrentAccelFace() {
   if (state.busy || state.imuCalibration.busy) return;
-  const face = ACCEL_CAL_FACES[index];
-  state.imuCalibration.busy = `accel-${index}`;
+  state.imuCalibration.busy = 'accel-detect';
   render();
   try {
+    // Firmware exposes tf-accel-mps2 after board-orientation TF but before
+    // bias/scale calibration, which is exactly the frame needed here.
     const sample = await sampleRawImu('accel', 32, 35, 'tf');
     const magnitude = vectorLength(sample.mean);
-    const crossMagnitude = Math.hypot(...sample.mean.filter((_, axis) => axis !== face.axis));
     if (Math.max(...sample.stddev) > 0.35 || Math.max(...sample.range) > 1.5) {
       throw new Error(t('error.imuMoved'));
     }
     if (magnitude < 7.5 || magnitude > 12.2) {
       throw new Error(t('error.accelMagnitude'));
     }
-    if (sample.mean[face.axis] * face.sign < 7.0 || crossMagnitude > 4.5) {
-      throw new Error(t('error.wrongAccelFace', {face: t(face.label)}));
+    const index = detectAccelFace(sample.mean);
+    if (index < 0) throw new Error(t('error.accelFaceUnclear'));
+    const face = ACCEL_CAL_FACES[index];
+    if (state.imuCalibration.accelFaces[index]) {
+      throw new Error(t('error.accelFaceDuplicate', {face: t(face.label)}));
     }
     state.imuCalibration.accelFaces[index] = sample;
     if (state.imuCalibration.accelFaces.every(Boolean)) {
@@ -1893,8 +1917,10 @@ async function saveBlob(blob, fileName, filters = []) {
   const link = document.createElement('a');
   link.href = url;
   link.download = fileName;
+  document.body.appendChild(link);
   link.click();
-  URL.revokeObjectURL(url);
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   return fileName;
 }
 
@@ -2842,34 +2868,33 @@ function boardPreviewTransform(roll, pitch, yaw) {
 function renderImuCalibration() {
   const calibration = state.imuCalibration;
   const completed = calibration.accelFaces.filter(Boolean).length;
-  const nextFace = calibration.accelFaces.findIndex((sample) => !sample);
   const gyroBias = calibration.gyroBias || configValue('fc_gyro_bias', [0, 0, 0]);
   const accelBias = calibration.accelBias || configValue('fc_accel_bias', [0, 0, 0]);
   const accelScale = calibration.accelScale || configValue('fc_accel_scale', [1, 1, 1]);
   const busy = Boolean(calibration.busy);
   const faceButtons = ACCEL_CAL_FACES.map((face, index) => {
     const done = Boolean(calibration.accelFaces[index]);
-    const classes = ['imu-face-button', done ? 'is-done' : '', index === nextFace ? 'is-next' : ''].filter(Boolean).join(' ');
-    return `<button class="${classes}" type="button" data-action="accel-face" data-face="${index}" ${state.busy || busy ? 'disabled' : ''}>
-      <span>${done ? '✓' : index + 1}</span><strong>${escapeHtml(t(face.label))}</strong><small>${escapeHtml(t('imuCalibration.captureFace'))}</small>
-    </button>`;
+    const classes = ['imu-face-button', done ? 'is-done' : 'is-pending'].join(' ');
+    return `<div class="${classes}" aria-label="${escapeHtml(t(face.label))}: ${escapeHtml(t(done ? 'imuCalibration.faceDone' : 'imuCalibration.facePending'))}">
+      <span>${done ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 12 4 4 8-9"/></svg>' : index + 1}</span><strong>${escapeHtml(t(face.label))}</strong><small>${escapeHtml(t(done ? 'imuCalibration.faceDone' : 'imuCalibration.facePending'))}</small>
+    </div>`;
   }).join('');
   return `
     <div class="row">
       <label>${t('imuCalibration.heading')}</label>
       <div class="notice">${t('imuCalibration.safety')}</div>
       <div class="imu-calibration-grid">
-        <section class="imu-cal-card ${calibration.busy.startsWith('accel-') ? 'is-calibrating' : ''}">
+        <section class="imu-cal-card ${calibration.busy === 'accel-detect' ? 'is-calibrating' : ''}">
           <div class="imu-card-heading">
             <div><h3>${t('imuCalibration.accelTitle')}</h3><p>${t('imuCalibration.accelDescription')}</p></div>
             <span class="cal-progress">${t('imuCalibration.progress', {done: completed})}</span>
           </div>
-          <div class="imu-step-hint">${nextFace >= 0
-            ? t('imuCalibration.nextFace', {face: t(ACCEL_CAL_FACES[nextFace].label)})
+          <div class="imu-step-hint">${completed < ACCEL_CAL_FACES.length
+            ? t('imuCalibration.autoFaceHint')
             : t('imuCalibration.accelReady')}</div>
           <div class="imu-face-actions">${faceButtons}</div>
-          <div class="actions"><button class="secondary" type="button" data-action="accel-reset" ${state.busy || busy ? 'disabled' : ''}>${t('imuCalibration.resetAccel')}</button></div>
-          ${calibration.busy.startsWith('accel-') ? `<div class="calibrating-overlay" role="status" aria-live="polite"><span aria-hidden="true"></span>${t('imuCalibration.sampling')}</div>` : ''}
+          <div class="actions"><button class="primary" type="button" data-action="accel-next" ${state.busy || busy || completed >= ACCEL_CAL_FACES.length ? 'disabled' : ''}>${t('imuCalibration.nextStep')}</button><button class="secondary" type="button" data-action="accel-reset" ${state.busy || busy ? 'disabled' : ''}>${t('imuCalibration.resetAccel')}</button></div>
+          ${calibration.busy === 'accel-detect' ? `<div class="calibrating-overlay" role="status" aria-live="polite"><span aria-hidden="true"></span>${t('imuCalibration.detectingFace')}</div>` : ''}
         </section>
         <section class="imu-cal-card ${calibration.busy === 'gyro' ? 'is-calibrating' : ''}">
           <div class="imu-card-heading">
@@ -2896,6 +2921,7 @@ function renderFlight() {
   const anglePid = flightConfigValue('fc_angle_pid', []);
   const dtermLpfHz = flightConfigValue('fc_dterm_lpf_hz', 20);
   const gyroLpfHz = flightConfigValue('fc_gyro_lpf_hz', 30);
+  const angleEnabled = Boolean(flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 1700]}).angle);
   const mixer = flightConfigValue('fc_mixer', []);
   const mixerServos = flightConfigValue('fc_mixer_servos', []);
   const modeConditions = flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 1700]});
@@ -2927,6 +2953,13 @@ function renderFlight() {
             ${renderActivationRange('angle', 'ANGLE', t('flight.angleDescription'), modeConditions.angle?.slice(1) ?? [1700, 2100], '#1f8f75', !modeConditions.angle, modeConditions.angle?.[0] ?? 6, auxOptions)}
           </div>
         </div>
+        <div class="mode-config arm-config" id="arm-mode-config">
+          <div class="mode-config-header">
+            <label class="arm-toggle" for="fc_arm_enabled"><input id="fc_arm_enabled" name="fc_arm_enabled" type="checkbox" ${checked(armEnabled)}><span><strong>${t('flight.armEnabled')}</strong><small>${t('flight.armDescription')}</small></span></label>
+            <label class="mode-channel" for="fc_arm_channel"><span>${t('flight.armChannel')}</span><select id="fc_arm_channel" name="fc_arm_channel" ${armEnabled ? '' : 'disabled'}>${auxOptions(armChannel)}</select></label>
+          </div>
+          ${renderActivationRange('arm', 'ARM', t('flight.armRangeDescription'), armRange, '#d97706', !armEnabled)}
+        </div>
         <div class="mode-config">
           <div class="mode-config-header">
             <div><h3>${t('flight.wifiModeRanges')}</h3><div class="helper">${t('flight.wifiRangeHelp')}</div></div>
@@ -2935,29 +2968,29 @@ function renderFlight() {
             ${renderActivationRange('wifi_coexist', t('flight.wifiCoexist'), t('flight.wifiCoexistDescription'), wifiConditions.coexist?.slice(1) ?? [1700, 2100], '#0891b2', !wifiConditions.coexist, wifiConditions.coexist?.[0] ?? 7, auxOptions)}
           </div>
         </div>
-        <div class="mode-config arm-config" id="arm-mode-config">
-          <div class="mode-config-header">
-            <label class="arm-toggle" for="fc_arm_enabled"><input id="fc_arm_enabled" name="fc_arm_enabled" type="checkbox" ${checked(armEnabled)}><span><strong>${t('flight.armEnabled')}</strong><small>${t('flight.armDescription')}</small></span></label>
-            <label class="mode-channel" for="fc_arm_channel"><span>${t('flight.armChannel')}</span><select id="fc_arm_channel" name="fc_arm_channel" ${armEnabled ? '' : 'disabled'}>${auxOptions(armChannel)}</select></label>
-          </div>
-          ${renderActivationRange('arm', 'ARM', t('flight.armRangeDescription'), armRange, '#d97706', !armEnabled)}
-        </div>
         <div class="notice">${t('notice.rateLoop')}</div>
-        <div class="row">
-          <label for="fc_gyro_lpf_hz">${t('flight.gyroLpf')}</label>
-          <input id="fc_gyro_lpf_hz" name="fc_gyro_lpf_hz" type="number" min="0" max="100" step="1" value="${escapeHtml(gyroLpfHz)}">
-          <div class="helper">${t('flight.gyroLpfHelp')}</div>
-        </div>
-        <div class="row">
-          <label for="fc_dterm_lpf_hz">${t('flight.dtermLpf')}</label>
-          <input id="fc_dterm_lpf_hz" name="fc_dterm_lpf_hz" type="number" min="0" max="100" step="1" value="${escapeHtml(dtermLpfHz)}">
-          <div class="helper">${t('flight.dtermLpfHelp')}</div>
+        <div class="filter-config">
+          <div class="filter-config-header"><div><h3>${t('flight.filterSettings')}</h3><div class="helper">${t('flight.filterSettingsHelp')}</div></div></div>
+          <div class="filter-config-body">
+            <div class="filter-lpf-grid">
+              <div class="row">
+                <label for="fc_gyro_lpf_hz">${t('flight.gyroLpf')}</label>
+                <input id="fc_gyro_lpf_hz" name="fc_gyro_lpf_hz" type="number" min="0" max="100" step="1" value="${escapeHtml(gyroLpfHz)}">
+                <div class="helper">${t('flight.gyroLpfHelp')}</div>
+              </div>
+              <div class="row">
+                <label for="fc_dterm_lpf_hz">${t('flight.dtermLpf')}</label>
+                <input id="fc_dterm_lpf_hz" name="fc_dterm_lpf_hz" type="number" min="0" max="100" step="1" value="${escapeHtml(dtermLpfHz)}">
+                <div class="helper">${t('flight.dtermLpfHelp')}</div>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="row">
           <label>${t('flight.ratePid')}</label>
           ${renderNumGrid('fc_rate_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], ratePid, {rowHeader: t('flight.axis')})}
         </div>
-        <div class="row" id="angle-pid-row">
+        <div class="row" id="angle-pid-row" style="display:${angleEnabled ? 'grid' : 'none'}">
           <label>${t('flight.anglePid')}</label>
           ${renderNumGrid('fc_angle_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], anglePid, {rowHeader: t('flight.axis')})}
         </div>
@@ -3019,7 +3052,7 @@ function renderFlight() {
             </div>
           </div>
         </div>
-        ${renderImuCalibration()}
+        <div id="angle-imu-calibration" style="display:${angleEnabled ? 'block' : 'none'}">${renderImuCalibration()}</div>
         <div class="actions"><button class="primary" ${state.busy || state.imuCalibration.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot" ${state.busy || state.imuCalibration.busy ? 'disabled' : ''}>${t('action.reboot')}</button></div>
       </form>
     </section>`;
@@ -3058,7 +3091,6 @@ function renderDebug() {
         </div>
       </section>
     </div>
-    ${renderDebugImu()}
     ${renderPidLog()}
   </div>`;
 }
@@ -3341,11 +3373,20 @@ function clearPidLive() {
   pidLiveRateWindow = []; render();
 }
 
-function savePidLive() {
+async function savePidLive() {
   const keys = ['timestampMs','sequence','mode','loopTimeUs','armed','angleRollTarget','angleRollState','anglePitchTarget','anglePitchState','rateRollTarget','rateRollState','ratePitchTarget','ratePitchState','rateYawTarget','rateYawState'];
   const csv = [keys.join(','), ...state.pidLogSamples.map((sample) => keys.map((key) => sample[key]).join(','))].join('\n');
-  const url = URL.createObjectURL(new Blob([csv], {type: 'text/csv'})); const anchor = document.createElement('a');
-  anchor.href = url; anchor.download = `glrs-pid-live-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  try {
+    const path = await saveBlob(
+      new Blob(['\uFEFF', csv], {type: 'text/csv;charset=utf-8'}),
+      `glrs-pid-live-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`,
+      [{name: 'CSV', extensions: ['csv']}],
+    );
+    if (path) state.message = {type: 'ok', text: t('pidlog.saveSuccess')};
+  } catch (error) {
+    state.message = {type: 'error', text: `${t('pidlog.saveFailed')}: ${error.message || String(error)}`};
+  }
+  render();
 }
 
 function updateDebugView() {
@@ -3359,10 +3400,6 @@ function updateDebugView() {
     const element = document.getElementById(id);
     if (element) element.textContent = value;
   });
-  const gyro = document.getElementById('debug-imu-gyro');
-  const accel = document.getElementById('debug-imu-accel');
-  if (gyro) gyro.innerHTML = formatImuVector([sample?.gyro_x_dps, sample?.gyro_y_dps, sample?.gyro_z_dps], '°/s');
-  if (accel) accel.innerHTML = formatImuVector([sample?.accel_x_mps2, sample?.accel_y_mps2, sample?.accel_z_mps2], 'm/s²');
   const errorElement = document.getElementById('debug-error');
   if (errorElement) {
     errorElement.textContent = state.debugError || '';
@@ -3473,24 +3510,6 @@ function renderUpdate() {
         </form>
       </section>
     </div>`;
-}
-
-function formatImuVector(value, unit) {
-  const vector = value.map(Number);
-  return vector.map((number, index) => `<div class="imu-axis imu-axis-${['x', 'y', 'z'][index]}"><span class="imu-axis-name">${['X', 'Y', 'Z'][index]}</span><strong>${Number.isFinite(number) ? number.toFixed(3) : '—'}</strong><small>${unit}</small></div>`).join('');
-}
-
-function renderDebugImu() {
-  const sample = state.debugSample;
-  return `<div class="imu-live-section debug-imu-row">
-    <div class="imu-live-card">
-      <div class="imu-card-heading"><div><h3>${t('debugImu.heading')}</h3><p>${t('debugImu.description')}</p></div><span class="imu-live-dot">MSP</span></div>
-      <div class="imu-live-groups">
-        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>${t('debugImu.gyroscope')}</span><small>${t('debugImu.gyroDescription')}</small></div><div class="imu-axis-grid" id="debug-imu-gyro">${formatImuVector([sample?.gyro_x_dps, sample?.gyro_y_dps, sample?.gyro_z_dps], '°/s')}</div></div>
-        <div class="imu-sensor-group"><div class="imu-sensor-title"><span>${t('debugImu.accelerometer')}</span><small>${t('debugImu.accelDescription')}</small></div><div class="imu-axis-grid" id="debug-imu-accel">${formatImuVector([sample?.accel_x_mps2, sample?.accel_y_mps2, sample?.accel_z_mps2], 'm/s²')}</div></div>
-      </div>
-    </div>
-  </div>`;
 }
 
 function renderCurrentTab() {
@@ -3742,7 +3761,7 @@ async function pollDebugOnce() {
   try {
     if (state.debugPolling) {
       try {
-        const imuSample = await tauriInvoke('msp_imu_poll');
+        const imuSample = await tauriInvoke('msp_attitude_poll');
         if (generation !== debugPollGeneration || !state.debugPolling) return;
         if (imuSample) {
           state.debugSample = imuSample;
@@ -4016,7 +4035,7 @@ function wireEvents() {
       if (action === 'add-motor') changeMixerRowCount(1);
       if (action === 'remove-motor') changeMixerRowCount(-1);
       if (action === 'quick-orientation') quickOrientationStep();
-      if (action === 'accel-face') void captureAccelFace(Number(button.dataset.face));
+      if (action === 'accel-next') void captureCurrentAccelFace();
       if (action === 'accel-reset') resetAccelCalibration();
       if (action === 'gyro-calibrate') void calibrateGyro();
       if (action === 'debug-start') startDebugPolling();
@@ -4024,7 +4043,7 @@ function wireEvents() {
       if (action === 'pidlive-start') void startPidLive();
       if (action === 'pidlive-stop') void stopPidLive().then(render);
       if (action === 'pidlive-clear') clearPidLive();
-      if (action === 'pidlive-save') savePidLive();
+      if (action === 'pidlive-save') void savePidLive();
       if (action === 'force-confirm') forceUpdate('confirm');
       if (action === 'force-cancel') forceUpdate('cancel');
       if (action === 'app-update-check') checkAppUpdate();
@@ -4080,6 +4099,14 @@ function wireModeRangeEditors() {
         card.querySelectorAll('select, [data-range-handle], [data-range-number]').forEach((input) => {
           input.disabled = disabled;
         });
+        if (modeToggle.name === 'fc_angle_enabled') {
+          const anglePid = document.querySelector('#angle-pid-row');
+          const angleImu = document.querySelector('#angle-imu-calibration');
+          anglePid?.style.setProperty('display', disabled ? 'none' : 'grid');
+          angleImu?.style.setProperty('display', disabled ? 'none' : 'block');
+          anglePid?.querySelectorAll('input, select, button').forEach((input) => { input.disabled = disabled; });
+          angleImu?.querySelectorAll('input, select, button').forEach((input) => { input.disabled = disabled; });
+        }
       };
       modeToggle.addEventListener('change', syncMode);
       syncMode();

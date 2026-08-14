@@ -6,25 +6,12 @@ use std::time::Duration;
 use tauri::Manager;
 
 const MSP_ELRS_FC_PID_DEBUG: u16 = 0x0451;
-const MSP_ELRS_FC_IMU_DEBUG: u16 = 0x0452;
+const MSP_ELRS_FC_ATTITUDE_DEBUG: u16 = 0x0455;
 const MSP_DEBUG_PORT: u16 = 5761;
 const MSP_DEBUG_TIMEOUT_MS: u64 = 500;
 
 struct MspDebugState {
     stream: Mutex<Option<TcpStream>>,
-}
-
-#[derive(Serialize)]
-struct ImuDebugSample {
-    roll_deg: f32,
-    pitch_deg: f32,
-    yaw_deg: f32,
-    gyro_x_dps: f32,
-    gyro_y_dps: f32,
-    gyro_z_dps: f32,
-    accel_x_mps2: f32,
-    accel_y_mps2: f32,
-    accel_z_mps2: f32,
 }
 
 #[derive(Serialize)]
@@ -45,6 +32,13 @@ struct PidDebugSample {
     gyro_z_dps: f32,
 }
 
+#[derive(Serialize)]
+struct AttitudeDebugSample {
+    roll_deg: f32,
+    pitch_deg: f32,
+    yaw_deg: f32,
+}
+
 fn crc8_dvb_s2(mut crc: u8, value: u8) -> u8 {
     crc ^= value;
     for _ in 0..8 {
@@ -57,21 +51,23 @@ fn crc8_dvb_s2(mut crc: u8, value: u8) -> u8 {
     crc
 }
 
-fn msp_v2_request(function: u16) -> [u8; 9] {
-    let mut frame = [0u8; 9];
+fn msp_v2_request(function: u16, payload: &[u8]) -> Vec<u8> {
+    let mut frame = vec![0u8; payload.len() + 9];
     frame[0] = b'$';
     frame[1] = b'X';
     frame[2] = b'<';
     frame[3] = 0;
     frame[4] = (function & 0xFF) as u8;
     frame[5] = (function >> 8) as u8;
-    frame[6] = 0;
-    frame[7] = 0;
+    frame[6] = (payload.len() & 0xFF) as u8;
+    frame[7] = (payload.len() >> 8) as u8;
+    frame[8..8 + payload.len()].copy_from_slice(payload);
     let mut crc = 0;
-    for byte in &frame[3..8] {
+    for byte in &frame[3..8 + payload.len()] {
         crc = crc8_dvb_s2(crc, *byte);
     }
-    frame[8] = crc;
+    let crc_offset = frame.len() - 1;
+    frame[crc_offset] = crc;
     frame
 }
 
@@ -110,33 +106,6 @@ fn read_exact_timeout(stream: &mut TcpStream, buffer: &mut [u8]) -> Result<bool,
     Ok(true)
 }
 
-fn parse_imu_debug_payload(payload: &[u8]) -> Result<ImuDebugSample, String> {
-    let mut offset = 0usize;
-    if payload.len() != 18 {
-        return Err("invalid MSP IMU payload length".into());
-    }
-    let roll_cd = read_i16(payload, &mut offset)?;
-    let pitch_cd = read_i16(payload, &mut offset)?;
-    let yaw_cd = read_i16(payload, &mut offset)?;
-    let gyro_x_cdps = read_i16(payload, &mut offset)?;
-    let gyro_y_cdps = read_i16(payload, &mut offset)?;
-    let gyro_z_cdps = read_i16(payload, &mut offset)?;
-    let accel_x_mmps2 = read_i16(payload, &mut offset)?;
-    let accel_y_mmps2 = read_i16(payload, &mut offset)?;
-    let accel_z_mmps2 = read_i16(payload, &mut offset)?;
-    Ok(ImuDebugSample {
-        roll_deg: roll_cd as f32 / 100.0,
-        pitch_deg: pitch_cd as f32 / 100.0,
-        yaw_deg: yaw_cd as f32 / 100.0,
-        gyro_x_dps: gyro_x_cdps as f32 / 100.0,
-        gyro_y_dps: gyro_y_cdps as f32 / 100.0,
-        gyro_z_dps: gyro_z_cdps as f32 / 100.0,
-        accel_x_mps2: accel_x_mmps2 as f32 / 1000.0,
-        accel_y_mps2: accel_y_mmps2 as f32 / 1000.0,
-        accel_z_mps2: accel_z_mmps2 as f32 / 1000.0,
-    })
-}
-
 fn parse_pid_debug_payload(payload: &[u8]) -> Result<PidDebugSample, String> {
     if payload.len() != 28 {
         return Err("invalid MSP PID payload length".into());
@@ -173,6 +142,18 @@ fn parse_pid_debug_payload(payload: &[u8]) -> Result<PidDebugSample, String> {
         gyro_x_dps: gyro_x_cdps as f32 / 100.0,
         gyro_y_dps: gyro_y_cdps as f32 / 100.0,
         gyro_z_dps: gyro_z_cdps as f32 / 100.0,
+    })
+}
+
+fn parse_attitude_debug_payload(payload: &[u8]) -> Result<AttitudeDebugSample, String> {
+    if payload.len() != 6 {
+        return Err("invalid MSP attitude payload length".into());
+    }
+    let mut offset = 0usize;
+    Ok(AttitudeDebugSample {
+        roll_deg: read_i16(payload, &mut offset)? as f32 / 100.0,
+        pitch_deg: read_i16(payload, &mut offset)? as f32 / 100.0,
+        yaw_deg: read_i16(payload, &mut offset)? as f32 / 100.0,
     })
 }
 
@@ -235,6 +216,7 @@ fn msp_debug_disconnect(state: tauri::State<MspDebugState>) -> Result<(), String
 fn poll_msp_debug_payload(
     state: tauri::State<MspDebugState>,
     request_function: u16,
+    request_payload: &[u8],
 ) -> Result<Option<Vec<u8>>, String> {
     let mut guard = state
         .stream
@@ -243,7 +225,7 @@ fn poll_msp_debug_payload(
     let stream = guard
         .as_mut()
         .ok_or_else(|| "MSP debug socket is not connected".to_string())?;
-    let request = msp_v2_request(request_function);
+    let request = msp_v2_request(request_function, request_payload);
     stream
         .write_all(&request)
         .map_err(|error| error.to_string())?;
@@ -278,16 +260,18 @@ fn poll_msp_debug_payload(
 }
 
 #[tauri::command]
-fn msp_imu_poll(state: tauri::State<MspDebugState>) -> Result<Option<ImuDebugSample>, String> {
-    poll_msp_debug_payload(state, MSP_ELRS_FC_IMU_DEBUG)?
-        .map(|payload| parse_imu_debug_payload(&payload))
+fn msp_pid_poll(state: tauri::State<MspDebugState>) -> Result<Option<PidDebugSample>, String> {
+    poll_msp_debug_payload(state, MSP_ELRS_FC_PID_DEBUG, &[])?
+        .map(|payload| parse_pid_debug_payload(&payload))
         .transpose()
 }
 
 #[tauri::command]
-fn msp_pid_poll(state: tauri::State<MspDebugState>) -> Result<Option<PidDebugSample>, String> {
-    poll_msp_debug_payload(state, MSP_ELRS_FC_PID_DEBUG)?
-        .map(|payload| parse_pid_debug_payload(&payload))
+fn msp_attitude_poll(
+    state: tauri::State<MspDebugState>,
+) -> Result<Option<AttitudeDebugSample>, String> {
+    poll_msp_debug_payload(state, MSP_ELRS_FC_ATTITUDE_DEBUG, &[])?
+        .map(|payload| parse_attitude_debug_payload(&payload))
         .transpose()
 }
 
@@ -1327,7 +1311,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             msp_debug_connect,
             msp_debug_disconnect,
-            msp_imu_poll,
+            msp_attitude_poll,
             msp_pid_poll,
             #[cfg(desktop)]
             app_updates::check_app_update,
