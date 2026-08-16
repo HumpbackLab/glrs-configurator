@@ -65,10 +65,13 @@ const state = {
     error: '',
   },
   extraMixerRows: 0,
-  eulerRoll: 0,
-  eulerPitch: 0,
-  eulerYaw: 0,
-  orientationCal: null,
+  orientationMatrix: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+  orientationCal: {
+    busy: false,
+    samples: Array(2).fill(null),
+    levelCorrectionDeg: null,
+    baseMatrix: null,
+  },
   imuCalibration: {
     busy: '',
     accelFaces: Array(6).fill(null),
@@ -123,6 +126,7 @@ let debugPollGeneration = 0;
 let mspDebugConnected = false;
 let mspDebugConnectPromise = null;
 let debugAircraftView = null;
+let orientationAircraftView = null;
 let pwmRuntimeUpdateTimer = null;
 let pwmRuntimeUpdateInFlight = false;
 let pwmRuntimePendingValues = null;
@@ -414,10 +418,6 @@ function bytesToList(value) {
   return Array.isArray(value) ? value.map((item) => Number(item) || 0) : [];
 }
 
-function listToString(value) {
-  return bytesToList(value).join(',');
-}
-
 function listToPrettyString(value) {
   return bytesToList(value).join(', ');
 }
@@ -428,88 +428,67 @@ function isValidUidByte(value) {
 }
 
 const md5 = (() => {
-  const k = [];
-  for (let i = 0; i < 64;) {
-    k[i] = 0 | (Math.abs(Math.sin(++i)) * 4294967296);
-  }
+  const constants = Array.from(
+    {length: 64},
+    (_, index) => 0 | (Math.abs(Math.sin(index + 1)) * 4294967296),
+  );
+  const shifts = [
+    7, 12, 17, 22,
+    5, 9, 14, 20,
+    4, 11, 16, 23,
+    6, 10, 15, 21,
+  ];
 
-  function calcMD5(str) {
-    let b;
-    let c;
-    let d;
-    let j;
-    const x = [];
-    const str2 = unescape(encodeURI(str));
-    let a = str2.length;
-    const h = [b = 1732584193, c = -271733879, ~b, ~c];
-    let i = 0;
-
-    for (; i <= a;) x[i >> 2] |= (str2.charCodeAt(i) || 128) << 8 * (i++ % 4);
-
-    str = (a + 8 >> 6) * 16 + 14;
-    x[str] = a * 8;
-    i = 0;
-
-    for (; i < str; i += 16) {
-      a = h; j = 0;
-      for (; j < 64;) {
-        a = [
-          d = a[3],
-          ((b = a[1] | 0) +
-            ((d = (
-              (a[0] +
-                [
-                  b & (c = a[2]) | ~b & d,
-                  d & b | ~d & c,
-                  b ^ c ^ d,
-                  c ^ (b | ~d)
-                ][a = j >> 4]
-              ) +
-              (k[j] +
-                (x[[
-                  j,
-                  5 * j + 1,
-                  3 * j + 5,
-                  7 * j
-                ][a] % 16 + i] | 0)
-              )
-            )) << (a = [
-              7, 12, 17, 22,
-              5, 9, 14, 20,
-              4, 11, 16, 23,
-              6, 10, 15, 21
-            ][4 * a + j++ % 4]) | d >>> 32 - a)
-          ),
-          b,
-          c
-        ];
-      }
-      for (j = 4; j;) h[--j] = h[j] + a[j];
+  function calcMD5(input) {
+    let bytes;
+    if (typeof input === 'string') {
+      const encoded = unescape(encodeURI(input));
+      bytes = Uint8Array.from(encoded, (character) => character.charCodeAt(0));
+    } else {
+      bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
     }
 
-    str = [];
-    for (; j < 32;) str.push(((h[j >> 3] >> ((1 ^ j++ & 7) * 4)) & 15) * 16 + ((h[j >> 3] >> ((1 ^ j++ & 7) * 4)) & 15));
+    const words = [];
+    for (let index = 0; index < bytes.length; ++index) {
+      words[index >> 2] = (words[index >> 2] || 0) | (bytes[index] << (8 * (index % 4)));
+    }
+    words[bytes.length >> 2] = (words[bytes.length >> 2] || 0) | (0x80 << (8 * (bytes.length % 4)));
+    const finalLengthIndex = ((bytes.length + 8 >> 6) * 16) + 14;
+    words[finalLengthIndex] = bytes.length * 8;
 
-    return new Uint8Array(str);
+    let hash = [1732584193, -271733879, -1732584194, 271733878];
+    for (let block = 0; block < finalLengthIndex; block += 16) {
+      let state = hash.slice();
+      for (let round = 0; round < 64; ++round) {
+        const group = round >> 4;
+        const b = state[1];
+        const c = state[2];
+        const d = state[3];
+        const mixed = [
+          (b & c) | (~b & d),
+          (d & b) | (~d & c),
+          b ^ c ^ d,
+          c ^ (b | ~d),
+        ][group];
+        const wordIndex = [round, 5 * round + 1, 3 * round + 5, 7 * round][group] % 16;
+        const value = (state[0] + mixed + constants[round] + (words[block + wordIndex] || 0)) | 0;
+        const shift = shifts[group * 4 + (round % 4)];
+        const rotated = (value << shift) | (value >>> (32 - shift));
+        state = [d, (b + rotated) | 0, b, c];
+      }
+      hash = hash.map((value, index) => (value + state[index]) | 0);
+    }
+
+    const output = new Uint8Array(16);
+    hash.forEach((value, word) => {
+      for (let byte = 0; byte < 4; ++byte) {
+        output[word * 4 + byte] = (value >>> (byte * 8)) & 0xff;
+      }
+    });
+    return output;
   }
   return calcMD5;
 })();
-
-function formatNumberList(value, rowSize) {
-  if (!Array.isArray(value)) return '';
-  const rows = [];
-  for (let i = 0; i < value.length; i += rowSize) {
-    rows.push(value.slice(i, i + rowSize).join(', '));
-  }
-  return rows.join('\n');
-}
-
-function parseNumberList(value) {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  const parsed = trimmed.split(/[\s,]+/).filter(Boolean).map(Number);
-  return parsed.some((item) => Number.isNaN(item)) ? null : parsed;
-}
 
 function pwmConnected() {
   return !!state.target;
@@ -532,10 +511,6 @@ function pwmEntries() {
     return dummy;
   }
   return [];
-}
-
-function pwmAvailable() {
-  return pwmEntries().length > 0;
 }
 
 function pwmOutputLimits() {
@@ -729,14 +704,6 @@ function intOrDefault(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function validateArray(label, value, rowSize, exactLength) {
-  if (value === undefined) return true;
-  if (value === null) throw new Error(t('error.validateArrayInvalid', {label}));
-  if (exactLength && value.length !== exactLength) throw new Error(t('error.validateArrayLength', {label, exactLength}));
-  if (!exactLength && value.length % rowSize !== 0) throw new Error(t('error.validateArrayAlignment', {label, rowSize}));
-  return true;
-}
-
 async function loadDevice() {
   const [target, configResponse, hardwareResponse] = await Promise.all([
     apiFetch('/target'),
@@ -805,20 +772,18 @@ async function loadDevice() {
       const {draft} = validateProfile(state.profileOriginal, {deviceAware: true});
       state.profileDraft = draft;
       state.profileImportError = '';
-      if (draft.flight) {
-        [state.eulerRoll, state.eulerPitch, state.eulerYaw] = installEulerFromOrientationMatrix(draft.flight.fc_orientation);
-      }
+      if (draft.flight) state.orientationMatrix = orientationMatrixOrIdentity(draft.flight.fc_orientation);
     } catch (error) {
       state.profileImportError = error.message || String(error);
     }
   }
   if (!state.profileDraft?.flight) {
     const orient = (configResponse?.config?.fc_orientation || []).length === 9 ? configResponse.config.fc_orientation : [];
-    const [roll, pitch, yaw] = installEulerFromOrientationMatrix(orient);
-    state.eulerRoll = roll;
-    state.eulerPitch = pitch;
-    state.eulerYaw = yaw;
+    state.orientationMatrix = orientationMatrixOrIdentity(orient);
   }
+  state.orientationCal.samples = Array(2).fill(null);
+  state.orientationCal.levelCorrectionDeg = null;
+  state.orientationCal.baseMatrix = null;
   if (!state.bindingPhrase) {
     state.bindingPhrase = '';
   }
@@ -884,12 +849,6 @@ function connectionStatusLabel() {
 function configValue(key, fallback) {
   const value = config()[key];
   return value === undefined ? fallback : value;
-}
-
-function booleanConfigValue(value, fallback = false) {
-  if (value === undefined || value === null) return fallback;
-  if (typeof value === 'string') return value.toLowerCase() === 'true' || value === '1';
-  return value === true || value === 1;
 }
 
 function flightConfigValue(key, fallback) {
@@ -1043,7 +1002,17 @@ async function saveFlight(event) {
     nextConfig.fc_arm_range = [armStart, armEnd];
     nextConfig.fc_rate_pid = readNumGrid(form, 'fc_rate_pid', 3, 4);
     const angleEnabled = form.fc_angle_enabled.checked;
-    if (angleEnabled) nextConfig.fc_angle_pid = readNumGrid(form, 'fc_angle_pid', 3, 4);
+    if (angleEnabled) {
+      nextConfig.fc_angle_pid = readNumGrid(form, 'fc_angle_pid', 3, 4);
+      const angleRateLimits = [
+        Number(form.fc_angle_rate_limit_roll_dps.value),
+        Number(form.fc_angle_rate_limit_pitch_dps.value),
+      ];
+      if (angleRateLimits.some((value) => !Number.isInteger(value) || value < 1 || value > 1000)) {
+        throw new Error(t('error.invalidAngleRateLimit'));
+      }
+      nextConfig.fc_angle_rate_limits_dps = angleRateLimits;
+    }
     const dtermLpfHz = intOrDefault(form.fc_dterm_lpf_hz.value, 20);
     if (dtermLpfHz < 0 || dtermLpfHz > 100 || (dtermLpfHz > 0 && dtermLpfHz < 5)) {
       throw new Error(t('error.invalidDtermLpf'));
@@ -1056,7 +1025,7 @@ async function saveFlight(event) {
     nextConfig.fc_gyro_lpf_hz = gyroLpfHz;
     nextConfig.fc_mixer = readNumGrid(form, 'fc_mixer', motorCount(), 4);
     nextConfig.fc_mixer_servos = readMixerServos(form, motorCount());
-    nextConfig.fc_orientation = orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw);
+    nextConfig.fc_orientation = orientationMatrixOrIdentity(state.orientationMatrix).map(round4);
     if (angleEnabled) {
       nextConfig.fc_gyro_bias = readNumGrid(form, 'fc_gyro_bias', 1, 3);
       nextConfig.fc_accel_bias = readNumGrid(form, 'fc_accel_bias', 1, 3);
@@ -1101,16 +1070,6 @@ function normalizeVector(v) {
   return v.map((value) => value / length);
 }
 
-function nearestCardinalAxis(v) {
-  const axis = [0, 0, 0];
-  let best = 0;
-  for (let i = 1; i < 3; i += 1) {
-    if (Math.abs(v[i]) > Math.abs(v[best])) best = i;
-  }
-  axis[best] = v[best] >= 0 ? 1 : -1;
-  return axis;
-}
-
 function dotVector(a, b) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
@@ -1123,16 +1082,24 @@ function crossVector(a, b) {
   ];
 }
 
-function normalizeCardinalAngle(degrees) {
-  let value = Math.round(degrees / 90) * 90;
-  while (value > 180) value -= 360;
-  while (value < -180) value += 360;
-  return value;
+function nearestCardinalAxis(vector) {
+  const absolute = vector.map(Math.abs);
+  const axis = absolute.indexOf(Math.max(...absolute));
+  const result = [0, 0, 0];
+  result[axis] = vector[axis] >= 0 ? 1 : -1;
+  return result;
 }
 
-async function sampleRawAccel(sampleCount = 24, delayMs = 40) {
-  const sample = await sampleRawImu('accel', sampleCount, delayMs);
-  return normalizeVector(sample.mean);
+function multiplyMatrix3(left, right) {
+  const result = Array(9).fill(0);
+  for (let row = 0; row < 3; row += 1) {
+    for (let column = 0; column < 3; column += 1) {
+      for (let index = 0; index < 3; index += 1) {
+        result[row * 3 + column] += left[row * 3 + index] * right[index * 3 + column];
+      }
+    }
+  }
+  return result;
 }
 
 async function sampleRawImu(sensor, sampleCount, delayMs, frame = 'raw') {
@@ -1182,6 +1149,13 @@ const ACCEL_CAL_FACES = [
   {axis: 2, sign: 1, label: 'imuCalibration.faceZPos'},
   {axis: 2, sign: -1, label: 'imuCalibration.faceZNeg'},
 ];
+const ORIENTATION_CAL_STEPS = [
+  {faceIndex: 4, label: 'orient.topUp'},
+  {faceIndex: 0, label: 'orient.noseUp'},
+];
+const MAX_ORIENTATION_LEVEL_CORRECTION_DEG = 30;
+const MAX_ORIENTATION_NOSE_ERROR_DEG = 25;
+const MAX_ORIENTATION_POSE_DOT = Math.cos(70 * Math.PI / 180);
 
 function roundedImuVector(values) {
   return values.map((value) => Number(value.toFixed(6)));
@@ -1215,7 +1189,7 @@ function detectAccelFace(mean) {
 }
 
 async function captureCurrentAccelFace() {
-  if (state.busy || state.imuCalibration.busy) return;
+  if (state.busy || state.imuCalibration.busy || state.orientationCal.busy) return;
   state.imuCalibration.busy = 'accel-detect';
   render();
   try {
@@ -1253,7 +1227,7 @@ async function captureCurrentAccelFace() {
 }
 
 async function calibrateGyro() {
-  if (state.busy || state.imuCalibration.busy) return;
+  if (state.busy || state.imuCalibration.busy || state.orientationCal.busy) return;
   state.imuCalibration.busy = 'gyro';
   render();
   try {
@@ -1283,57 +1257,141 @@ function resetAccelCalibration() {
   render();
 }
 
-function orientationEulerFromSamples(levelRaw, forwardRaw) {
-  // Firmware expects fc_orientation to rotate raw IMU axes into the internal frame.
-  // Level gravity maps to internal +Z; nose-up gravity maps to internal +X.
-  // The resulting matrix is therefore the firmware matrix, not the user-facing
-  // physical install attitude. Convert it back before filling the UI controls.
+function determinantMatrix3(m) {
+  return m[0] * (m[4] * m[8] - m[5] * m[7])
+    - m[1] * (m[3] * m[8] - m[5] * m[6])
+    + m[2] * (m[3] * m[7] - m[4] * m[6]);
+}
+
+function inverseTransposeMatrix3(m) {
+  const determinant = determinantMatrix3(m);
+  if (!Number.isFinite(determinant) || Math.abs(determinant) < 0.000001) {
+    throw new Error(t('error.orientationFit'));
+  }
+  return [
+    (m[4] * m[8] - m[5] * m[7]) / determinant,
+    (m[5] * m[6] - m[3] * m[8]) / determinant,
+    (m[3] * m[7] - m[4] * m[6]) / determinant,
+    (m[2] * m[7] - m[1] * m[8]) / determinant,
+    (m[0] * m[8] - m[2] * m[6]) / determinant,
+    (m[1] * m[6] - m[0] * m[7]) / determinant,
+    (m[1] * m[5] - m[2] * m[4]) / determinant,
+    (m[2] * m[3] - m[0] * m[5]) / determinant,
+    (m[0] * m[4] - m[1] * m[3]) / determinant,
+  ];
+}
+
+function nearestRotationMatrix3(candidate) {
+  if (determinantMatrix3(candidate) <= 0.05) throw new Error(t('error.orientationFit'));
+  let matrix = candidate.map(Number);
+  // Newton polar decomposition removes floating-point drift and projects onto SO(3).
+  for (let iteration = 0; iteration < 12; iteration += 1) {
+    const inverseTranspose = inverseTransposeMatrix3(matrix);
+    matrix = matrix.map((value, index) => (value + inverseTranspose[index]) / 2);
+  }
+  if (determinantMatrix3(matrix) < 0.999) throw new Error(t('error.orientationFit'));
+  return matrix.map(round4);
+}
+
+function rotateVector3(matrix, vector) {
+  return [
+    dotVector(matrix.slice(0, 3), vector),
+    dotVector(matrix.slice(3, 6), vector),
+    dotVector(matrix.slice(6, 9), vector),
+  ];
+}
+
+function calculateOrientationMatrix(samples) {
+  if (!samples.every(Boolean)) throw new Error(t('error.orientationIncomplete'));
+  const levelRaw = normalizeVector(samples[0].mean);
+  const noseRaw = normalizeVector(samples[1].mean);
+  if (Math.abs(dotVector(levelRaw, noseRaw)) > MAX_ORIENTATION_POSE_DOT) {
+    throw new Error(t('error.orientationPosesNotPerpendicular'));
+  }
+
+  // First identify the nearest 90-degree sensor-to-aircraft axis mapping.
   const rowZ = nearestCardinalAxis(levelRaw);
-  const rowX = nearestCardinalAxis(forwardRaw);
+  const rowX = nearestCardinalAxis(noseRaw);
   if (Math.abs(dotVector(rowX, rowZ)) > 0) {
-    throw new Error(t('error.sameAxis'));
+    throw new Error(t('error.orientationSameAxis'));
   }
   const rowY = crossVector(rowZ, rowX);
-  const matrix = [...rowX, ...rowY, ...rowZ];
-  const [roll, pitch, yaw] = installEulerFromOrientationMatrix(matrix).map(normalizeCardinalAngle);
-  return {roll, pitch, yaw, matrix};
-}
+  const coarseMatrix = [...rowX, ...rowY, ...rowZ];
 
-function orientationCalText() {
-  if (state.orientationCal?.level) {
-    return t('orient.instructionNoseUp');
+  // The first pose is also the horizon reference. Preserve the snapped yaw,
+  // then add continuous roll/pitch so its gravity vector maps exactly to +Z.
+  const coarseLevel = normalizeVector(rotateVector3(coarseMatrix, levelRaw));
+  const roll = Math.atan2(coarseLevel[1], coarseLevel[2]);
+  const pitch = Math.atan2(-coarseLevel[0], Math.hypot(coarseLevel[1], coarseLevel[2]));
+  const rollDeg = deg(roll);
+  const pitchDeg = deg(pitch);
+  if (Math.abs(rollDeg) > MAX_ORIENTATION_LEVEL_CORRECTION_DEG
+      || Math.abs(pitchDeg) > MAX_ORIENTATION_LEVEL_CORRECTION_DEG) {
+    throw new Error(t('error.orientationLevelTiltTooLarge'));
   }
-  return t('orient.instructionLevel');
-}
 
-function orientationCalButtonText() {
-  if (state.orientationCal?.level) {
-    return t('orient.sampleNoseUp');
+  const cr = Math.cos(roll), sr = Math.sin(roll);
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const rollCorrection = [1, 0, 0, 0, cr, -sr, 0, sr, cr];
+  const pitchCorrection = [cp, 0, sp, 0, 1, 0, -sp, 0, cp];
+  const levelCorrection = multiplyMatrix3(pitchCorrection, rollCorrection);
+  const matrix = nearestRotationMatrix3(multiplyMatrix3(levelCorrection, coarseMatrix));
+
+  const transformedNose = normalizeVector(rotateVector3(matrix, noseRaw));
+  const noseErrorDeg = deg(Math.acos(clamp(transformedNose[0], -1, 1)));
+  if (noseErrorDeg > MAX_ORIENTATION_NOSE_ERROR_DEG) {
+    throw new Error(t('error.orientationNoseMismatch'));
   }
-  return t('orient.sampleLevel');
+  return {
+    matrix,
+    levelCorrectionDeg: [round4(rollDeg), round4(pitchDeg)],
+  };
 }
 
-function setEulerAngles(roll, pitch, yaw) {
-  state.eulerRoll = roll;
-  state.eulerPitch = pitch;
-  state.eulerYaw = yaw;
-}
-
-async function quickOrientationStep() {
-  await runBusy(async () => {
-    if (!state.orientationCal?.level) {
-      const level = await sampleRawAccel();
-      state.orientationCal = {level};
-      setMessage('ok', t('orient.levelCaptured'));
-      return;
+async function captureOrientationFace() {
+  if (state.busy || state.orientationCal.busy || state.imuCalibration.busy) return;
+  const index = state.orientationCal.samples.findIndex((sample) => !sample);
+  if (index < 0) return;
+  if (!state.orientationCal.samples.some(Boolean)) {
+    state.orientationCal.baseMatrix = orientationMatrixOrIdentity(state.orientationMatrix).slice();
+  }
+  state.orientationCal.busy = true;
+  render();
+  try {
+    const sample = await sampleRawImu('accel', 32, 35, 'raw');
+    const magnitude = vectorLength(sample.mean);
+    if (Math.max(...sample.stddev) > 0.35 || Math.max(...sample.range) > 1.5) {
+      throw new Error(t('error.imuMoved'));
     }
+    if (magnitude < 7.5 || magnitude > 12.2) throw new Error(t('error.accelMagnitude'));
+    state.orientationCal.samples[index] = sample;
+    if (state.orientationCal.samples.every(Boolean)) {
+      const result = calculateOrientationMatrix(state.orientationCal.samples);
+      state.orientationMatrix = result.matrix;
+      state.orientationCal.levelCorrectionDeg = result.levelCorrectionDeg;
+      setMessage('ok', t('orient.complete', {
+        roll: result.levelCorrectionDeg[0].toFixed(1),
+        pitch: result.levelCorrectionDeg[1].toFixed(1),
+      }));
+    } else {
+      setMessage('ok', t('orient.topCaptured'));
+    }
+  } catch (error) {
+    setMessage('error', error.message || String(error));
+  } finally {
+    state.orientationCal.busy = false;
+    render();
+  }
+}
 
-    const forward = await sampleRawAccel();
-    const result = orientationEulerFromSamples(state.orientationCal.level, forward);
-    setEulerAngles(result.roll, result.pitch, result.yaw);
-    state.orientationCal = null;
-    setMessage('ok', t('orient.setResult', {roll: result.roll, pitch: result.pitch, yaw: result.yaw}));
-  });
+function resetOrientationCalibration() {
+  if (state.orientationCal.busy || state.imuCalibration.busy) return;
+  if (state.orientationCal.baseMatrix) state.orientationMatrix = state.orientationCal.baseMatrix.slice();
+  state.orientationCal.samples = Array(2).fill(null);
+  state.orientationCal.levelCorrectionDeg = null;
+  state.orientationCal.baseMatrix = null;
+  state.message = null;
+  render();
 }
 
 async function saveHardwareJson(event) {
@@ -1386,14 +1444,24 @@ async function rebootDevice() {
 
 async function uploadFirmwareFile(file) {
   await runBusy(async () => {
-    state.uploadProgress = {loaded: 0, total: file.size, phase: t('update.phase.uploading')};
+    state.uploadProgress = {loaded: 0, total: file.size, phase: t('update.phase.verifying')};
     render();
+    const fileBytes = new Uint8Array(await file.arrayBuffer());
+    if ((state.target?.target || '').toUpperCase().includes('ESP32')) {
+      validateUnifiedEsp32Firmware(fileBytes);
+    }
+    const fileMd5 = md5Hex(fileBytes);
     const form = new FormData();
     form.set('update[]', file, file.name);
+    state.uploadProgress = {loaded: 0, total: file.size, phase: t('update.phase.uploading')};
+    render();
     const result = await xhrRequest('/update', {
       method: 'POST',
       body: form,
-      headers: {'X-FileSize': String(file.size)},
+      headers: {
+        'X-FileSize': String(file.size),
+        'X-File-MD5': fileMd5,
+      },
       timeout: 90000,
       onUploadProgress: (progressEvent) => {
         state.uploadProgress = {
@@ -1776,6 +1844,110 @@ function updateDebugAircraftAttitude(sample) {
   debugAircraftView.render();
 }
 
+const ORIENTATION_FACE_ATTITUDES = {
+  0: {roll: 0, pitch: -90, yaw: 0},
+  1: {roll: 0, pitch: 90, yaw: 0},
+  2: {roll: 90, pitch: 0, yaw: 0},
+  3: {roll: -90, pitch: 0, yaw: 0},
+  4: {roll: 0, pitch: 0, yaw: 0},
+  5: {roll: 180, pitch: 0, yaw: 0},
+};
+
+function currentOrientationFaceIndex() {
+  const stepIndex = state.orientationCal.samples.findIndex((sample) => !sample);
+  return ORIENTATION_CAL_STEPS[stepIndex >= 0 ? stepIndex : ORIENTATION_CAL_STEPS.length - 1].faceIndex;
+}
+
+function disposeOrientationAircraftView() {
+  if (!orientationAircraftView) return;
+  window.removeEventListener('resize', orientationAircraftView.resize);
+  orientationAircraftView.renderer?.dispose();
+  orientationAircraftView = null;
+}
+
+function updateOrientationAircraftPose() {
+  if (!orientationAircraftView?.model) return;
+  const attitude = ORIENTATION_FACE_ATTITUDES[currentOrientationFaceIndex()];
+  orientationAircraftView.model.rotation.x = attitude.roll * DEG_TO_RAD;
+  orientationAircraftView.model.rotation.z = attitude.pitch * -DEG_TO_RAD;
+  orientationAircraftView.modelWrapper.rotation.y = attitude.yaw * DEG_TO_RAD;
+  orientationAircraftView.render();
+}
+
+function initOrientationAircraftView() {
+  const canvas = document.getElementById('orientation-aircraft-canvas');
+  const wrapper = document.getElementById('orientation-aircraft-wrapper');
+  if (!canvas || !wrapper) {
+    disposeOrientationAircraftView();
+    return;
+  }
+  if (orientationAircraftView?.canvas === canvas) {
+    orientationAircraftView.resize();
+    return;
+  }
+  disposeOrientationAircraftView();
+
+  const renderer = new THREE.WebGLRenderer({canvas, alpha: true, antialias: true, preserveDrawingBuffer: true});
+  renderer.setClearColor(0x000000, 0);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+  camera.position.set(0, 1.5, 7);
+  camera.lookAt(0, 0, 0);
+  const modelWrapper = new THREE.Object3D();
+  let model = createFallbackAircraft();
+  model.scale.set(1.4, 1.4, 1.4);
+  modelWrapper.add(model);
+  scene.add(modelWrapper);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x9aa4b2, 1.1));
+  const keyLight = new THREE.DirectionalLight(0xffffff, 1.8);
+  keyLight.position.set(2.5, 4, 3);
+  scene.add(keyLight);
+
+  const view = {
+    canvas,
+    renderer,
+    scene,
+    camera,
+    modelWrapper,
+    get model() { return model; },
+    set model(nextModel) {
+      modelWrapper.remove(model);
+      model = nextModel;
+      modelWrapper.add(model);
+    },
+    resize() {
+      const rect = wrapper.getBoundingClientRect();
+      const width = Math.max(1, Math.floor(rect.width));
+      const height = Math.max(1, Math.floor(rect.height));
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      updateOrientationAircraftPose();
+    },
+    render() { renderer.render(scene, camera); },
+  };
+  orientationAircraftView = view;
+  window.addEventListener('resize', view.resize);
+
+  new GLTFLoader().load(
+    '/models/model_rudderless_plane.gltf',
+    (gltf) => {
+      if (orientationAircraftView !== view) return;
+      const loadedModel = gltf.scene;
+      loadedModel.scale.set(0.5, 0.5, 0.5);
+      const box = new THREE.Box3().setFromObject(loadedModel);
+      const center = box.getCenter(new THREE.Vector3());
+      loadedModel.position.sub(center);
+      view.model = loadedModel;
+      updateOrientationAircraftPose();
+    },
+    undefined,
+    () => view.render(),
+  );
+  view.resize();
+}
+
 function profilePwmOutputs() {
   const form = document.querySelector('#pwm-form');
   const limits = pwmOutputLimits();
@@ -1816,11 +1988,12 @@ function profileFlightConfig() {
       },
       ratePid: flightConfigValue('fc_rate_pid', []),
       anglePid: flightConfigValue('fc_angle_pid', []),
+      angleRateLimitsDps: flightConfigValue('fc_angle_rate_limits_dps', [100, 100]),
       dtermLpfHz: flightConfigValue('fc_dterm_lpf_hz', 20),
       gyroLpfHz: flightConfigValue('fc_gyro_lpf_hz', 30),
       mixer: flightConfigValue('fc_mixer', []),
       mixerServos: flightConfigValue('fc_mixer_servos', []),
-      orientation: orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw),
+      orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4),
     };
   }
 
@@ -1845,11 +2018,15 @@ function profileFlightConfig() {
     },
     ratePid: readNumGrid(form, 'fc_rate_pid', 3, 4),
     anglePid: readNumGrid(form, 'fc_angle_pid', 3, 4),
+    angleRateLimitsDps: [
+      intOrDefault(form.fc_angle_rate_limit_roll_dps.value, 100),
+      intOrDefault(form.fc_angle_rate_limit_pitch_dps.value, 100),
+    ],
     dtermLpfHz: intOrDefault(form.fc_dterm_lpf_hz.value, 20),
     gyroLpfHz: intOrDefault(form.fc_gyro_lpf_hz.value, 30),
     mixer: readNumGrid(form, 'fc_mixer', motorCount(), 4),
     mixerServos: readMixerServos(form, motorCount()),
-    orientation: orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw),
+    orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4),
   };
 }
 
@@ -2061,6 +2238,14 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
     if (gyroLpfHz > 0 && gyroLpfHz < 5) {
       throw new Error(t('error.invalidGyroLpf'));
     }
+    const angleRateLimitsDps = requireProfileArray(
+      profile.flight.angleRateLimitsDps ?? [100, 100],
+      'ANGLE rate limits',
+      2,
+      1,
+      1000,
+      true,
+    );
     const orientation = validateOrientationMatrix(
       requireProfileArray(profile.flight.orientation, 'orientation', 9, -1.1, 1.1),
     );
@@ -2071,6 +2256,7 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
       fc_arm_range: validateProfileRange(arm.range, 'ARM range'),
       fc_rate_pid: requireProfileArray(profile.flight.ratePid, 'Rate PID', 12, -327.68, 327.67),
       fc_angle_pid: requireProfileArray(profile.flight.anglePid, 'Angle PID', 12, -327.68, 327.67),
+      fc_angle_rate_limits_dps: angleRateLimitsDps,
       fc_dterm_lpf_hz: dtermLpfHz,
       fc_gyro_lpf_hz: gyroLpfHz,
       fc_mixer: mixer.map(Number),
@@ -2089,9 +2275,7 @@ function applyImportedProfile(profile) {
   state.profileCompatibility = structuredClone(profile.compatibility || {});
   state.profileImportError = '';
   state.extraMixerRows = 0;
-  if (draft.flight) {
-    [state.eulerRoll, state.eulerPitch, state.eulerYaw] = installEulerFromOrientationMatrix(draft.flight.fc_orientation);
-  }
+  if (draft.flight) state.orientationMatrix = orientationMatrixOrIdentity(draft.flight.fc_orientation);
   state.message = {type: 'ok', text: warnings.length
     ? `${t('message.profileImported')} ${warnings.join(' ')}`
     : t('message.profileImported')};
@@ -2116,7 +2300,7 @@ function discardProfileDraft() {
   state.profileImportError = '';
   state.extraMixerRows = 0;
   const orientation = configValue('fc_orientation', []);
-  [state.eulerRoll, state.eulerPitch, state.eulerYaw] = installEulerFromOrientationMatrix(orientation);
+  state.orientationMatrix = orientationMatrixOrIdentity(orientation);
   setMessage('ok', t('message.profileDiscarded'));
 }
 
@@ -2287,6 +2471,61 @@ function updateCommunityCatalogResults() {
 async function sha256Hex(text) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+function md5Hex(input) {
+  return Array.from(md5(input), (value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+function validateUnifiedEsp32Firmware(bytes) {
+  if (bytes.length < 24 || bytes[0] !== 0xe9) {
+    throw new Error(t('update.invalidHeader'));
+  }
+  const segmentCount = bytes[1];
+  if (segmentCount < 1 || segmentCount > 16) {
+    throw new Error(t('update.invalidSegments'));
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let position = 24;
+  for (let segment = 0; segment < segmentCount; ++segment) {
+    if (position + 8 > bytes.length) throw new Error(t('update.truncatedImage'));
+    const segmentSize = view.getUint32(position + 4, true);
+    position += 8 + segmentSize;
+    if (!Number.isSafeInteger(position) || position > bytes.length) {
+      throw new Error(t('update.truncatedImage'));
+    }
+  }
+
+  const firmwareEnd = ((position + 16) & ~15) + 32;
+  const productSize = 128;
+  const hardwareOffset = productSize + 16 + 512;
+  const hardwareSize = 2048;
+  if (firmwareEnd + hardwareOffset + hardwareSize > bytes.length) {
+    throw new Error(t('update.missingHardware'));
+  }
+
+  const decodeField = (start, length) => {
+    const field = bytes.subarray(start, start + length);
+    const terminator = field.indexOf(0);
+    return new TextDecoder().decode(terminator >= 0 ? field.subarray(0, terminator) : field).trim();
+  };
+  const product = decodeField(firmwareEnd, productSize);
+  if (!product) {
+    throw new Error(t('update.missingProduct'));
+  }
+  // Bare Unified images are intentionally supported by the firmware. They can
+  // be flashed first and assigned a hardware target from the WebUI afterwards.
+  if (['Unified', 'Unified RX', 'Unified TX'].includes(product)) return;
+
+  try {
+    const hardware = JSON.parse(decodeField(firmwareEnd + hardwareOffset, hardwareSize));
+    if (!hardware || Array.isArray(hardware) || typeof hardware !== 'object' || Object.keys(hardware).length === 0) {
+      throw new Error('empty');
+    }
+  } catch {
+    throw new Error(t('update.invalidHardware'));
+  }
 }
 
 async function fetchCommunityProfile(item) {
@@ -2760,9 +2999,14 @@ function changeMixerRowCount(delta) {
   if (removeButton) removeButton.disabled = state.busy || state.extraMixerRows <= 0;
 }
 
-function rad(deg) { return deg * Math.PI / 180; }
 function deg(rad) { return rad * 180 / Math.PI; }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+
+function orientationMatrixOrIdentity(matrix) {
+  if (!Array.isArray(matrix) || matrix.length < 9) return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  const values = matrix.slice(0, 9).map(Number);
+  return values.every(Number.isFinite) ? values : [1, 0, 0, 0, 1, 0, 0, 0, 1];
+}
 
 function eulerFromMatrix(m) {
   // Decompose 3x3 rotation matrix (ZYX convention) into [roll, pitch, yaw] degrees.
@@ -2782,19 +3026,7 @@ function eulerFromMatrix(m) {
     roll = 0;
     yaw = Math.atan2(-m01, m11);
   }
-  return [Math.round(deg(roll)), Math.round(deg(pitch)), Math.round(deg(yaw))];
-}
-
-function matrixFromEuler(roll, pitch, yaw) {
-  // Compute 3x3 rotation matrix (ZYX convention, flat row-major).
-  const cr = Math.cos(rad(roll)), sr = Math.sin(rad(roll));
-  const cp = Math.cos(rad(pitch)), sp = Math.sin(rad(pitch));
-  const cy = Math.cos(rad(yaw)), sy = Math.sin(rad(yaw));
-  return [
-    round4(cy * cp),              round4(cy * sp * sr - sy * cr), round4(cy * sp * cr + sy * sr),
-    round4(sy * cp),              round4(sy * sp * sr + cy * cr), round4(sy * sp * cr - cy * sr),
-    round4(-sp),                  round4(cp * sr),                round4(cp * cr),
-  ];
+  return [roll, pitch, yaw].map((value) => Math.round(deg(value) * 10) / 10);
 }
 
 function transposeMatrix3(m) {
@@ -2806,15 +3038,6 @@ function transposeMatrix3(m) {
   ];
 }
 
-function orientationMatrixFromInstallEuler(roll, pitch, yaw) {
-  // UI angles describe the physical board install attitude in the body frame.
-  // Firmware fc_orientation has the opposite direction: raw IMU frame -> internal
-  // body frame (+X forward, +Y left, +Z up). For pure rotation matrices the
-  // inverse is the transpose, so the saved matrix is the inverse of the visible
-  // install angle. Example: a physical yaw=90 install may save as yaw=-90.
-  return transposeMatrix3(matrixFromEuler(roll, pitch, yaw)).map(round4);
-}
-
 function installEulerFromOrientationMatrix(m) {
   // Hardware JSON stores the firmware raw->internal matrix. Show users the
   // inverse because the UI labels are physical install roll/pitch/yaw.
@@ -2823,10 +3046,6 @@ function installEulerFromOrientationMatrix(m) {
 
 function round4(value) {
   return Math.round(value * 10000) / 10000;
-}
-
-function formatMatrixRow(row) {
-  return row.map((v) => String(v).padStart(8)).join(' ');
 }
 
 function renderActivationRange(id, label, description, range, tone, disabled = false, channel = null, auxOptions = null) {
@@ -2858,20 +3077,13 @@ function renderActivationRange(id, label, description, range, tone, disabled = f
     </div>`;
 }
 
-function boardPreviewTransform(roll, pitch, yaw) {
-  // The board graphic draws FlightControl +X forward as the on-screen FW arrow.
-  // Map preview rotations onto that frame: roll about forward, pitch about left,
-  // and yaw inverted for CSS' top-down screen rotation direction.
-  return `rotateZ(${-yaw}deg) rotateY(${roll}deg) rotateX(${pitch}deg)`;
-}
-
 function renderImuCalibration() {
   const calibration = state.imuCalibration;
   const completed = calibration.accelFaces.filter(Boolean).length;
   const gyroBias = calibration.gyroBias || configValue('fc_gyro_bias', [0, 0, 0]);
   const accelBias = calibration.accelBias || configValue('fc_accel_bias', [0, 0, 0]);
   const accelScale = calibration.accelScale || configValue('fc_accel_scale', [1, 1, 1]);
-  const busy = Boolean(calibration.busy);
+  const busy = Boolean(calibration.busy || state.orientationCal.busy);
   const faceButtons = ACCEL_CAL_FACES.map((face, index) => {
     const done = Boolean(calibration.accelFaces[index]);
     const classes = ['imu-face-button', done ? 'is-done' : 'is-pending'].join(' ');
@@ -2915,10 +3127,64 @@ function renderImuCalibration() {
     </div>`;
 }
 
+function renderOrientationCalibration(installEuler) {
+  const calibration = state.orientationCal;
+  const completed = calibration.samples.filter(Boolean).length;
+  const nextIndex = calibration.samples.findIndex((sample) => !sample);
+  const faceStatus = ORIENTATION_CAL_STEPS.map((step, orderIndex) => {
+    const done = Boolean(calibration.samples[orderIndex]);
+    const current = orderIndex === nextIndex;
+    const classes = ['imu-face-button', done ? 'is-done' : 'is-pending', current ? 'is-current' : ''].filter(Boolean).join(' ');
+    const statusKey = done ? 'imuCalibration.faceDone' : (current ? 'orient.faceCurrent' : 'imuCalibration.facePending');
+    return `<div class="${classes}" aria-label="${escapeHtml(t(step.label))}: ${escapeHtml(t(statusKey))}">
+      <span>${done ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 12 4 4 8-9"/></svg>' : orderIndex + 1}</span><strong>${escapeHtml(t(step.label))}</strong><small>${escapeHtml(t(statusKey))}</small>
+    </div>`;
+  }).join('');
+  const hint = nextIndex >= 0
+    ? t(nextIndex === 0 ? 'orient.topUpInstruction' : 'orient.noseUpInstruction')
+    : t('orient.ready', {
+      roll: Number(calibration.levelCorrectionDeg?.[0] || 0).toFixed(1),
+      pitch: Number(calibration.levelCorrectionDeg?.[1] || 0).toFixed(1),
+    });
+  const poseStepIndex = nextIndex >= 0 ? nextIndex : ORIENTATION_CAL_STEPS.length - 1;
+  const poseStep = ORIENTATION_CAL_STEPS[poseStepIndex];
+  return `
+    <div class="orientation-editor">
+      <div class="orientation-calibration-layout">
+        <section class="imu-cal-card orientation-cal-card ${calibration.busy ? 'is-calibrating' : ''}">
+          <div class="imu-card-heading">
+            <div><h3>${t('orient.heading')}</h3><p>${t('orient.description')}</p></div>
+            <span class="cal-progress">${t('orient.progress', {done: completed})}</span>
+          </div>
+          <div class="notice">${t('orient.safety')}</div>
+          <div class="imu-step-hint">${escapeHtml(hint)}</div>
+          <div class="imu-face-actions">${faceStatus}</div>
+          <div class="actions"><button class="primary" type="button" data-action="orientation-next" ${state.busy || calibration.busy || state.imuCalibration.busy || nextIndex < 0 ? 'disabled' : ''}>${t('orient.capture')}</button><button class="secondary" type="button" data-action="orientation-reset" ${state.busy || calibration.busy || state.imuCalibration.busy ? 'disabled' : ''}>${t('orient.reset')}</button></div>
+          ${calibration.busy ? `<div class="calibrating-overlay" role="status" aria-live="polite"><span aria-hidden="true"></span>${t('imuCalibration.sampling')}</div>` : ''}
+        </section>
+        <aside class="orientation-pose-card" aria-label="${escapeHtml(t('orient.poseTitle'))}">
+          <div class="orientation-pose-heading"><span>${t('orient.poseTitle')}</span><strong>${escapeHtml(t(poseStep.label))}</strong></div>
+          <div id="orientation-aircraft-wrapper" class="orientation-aircraft-wrapper">
+            <canvas id="orientation-aircraft-canvas" aria-label="${escapeHtml(t('orient.poseCanvasLabel', {face: t(poseStep.label)}))}"></canvas>
+          </div>
+          <div class="helper">${t(poseStepIndex === 0 ? 'orient.topUpPoseHelp' : 'orient.noseUpPoseHelp')}</div>
+        </aside>
+      </div>
+      <section class="orientation-results-card">
+        <div class="orientation-results-heading"><strong>${t('orient.eulerResult')}</strong><span>${t('orient.resultReadOnly')}</span></div>
+        <div class="imu-cal-results orientation-results">
+          <div>${renderNumGrid('orientation-euler-result', [t('orient.installAngle')], [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], installEuler, {rowHeader: t('flight.axis'), disabled: true})}</div>
+        </div>
+        <div class="helper">${t('orient.saveHelp')}</div>
+      </section>
+    </div>`;
+}
+
 function renderFlight() {
   const motors = motorCount();
   const ratePid = flightConfigValue('fc_rate_pid', []);
   const anglePid = flightConfigValue('fc_angle_pid', []);
+  const angleRateLimits = flightConfigValue('fc_angle_rate_limits_dps', [100, 100]);
   const dtermLpfHz = flightConfigValue('fc_dterm_lpf_hz', 20);
   const gyroLpfHz = flightConfigValue('fc_gyro_lpf_hz', 30);
   const angleEnabled = Boolean(flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 1700]}).angle);
@@ -2930,15 +3196,8 @@ function renderFlight() {
   const armChannel = flightConfigValue('fc_arm_channel', 5);
   const armRange = flightConfigValue('fc_arm_range', [1700, 2100]);
   const auxOptions = (selectedChannel) => pwmInputLabels.slice(4).map((label, index) => `<option value="${index + 5}" ${selected(selectedChannel, index + 5)}>${label}</option>`).join('');
-  const roll = state.eulerRoll ?? 0;
-  const pitch = state.eulerPitch ?? 0;
-  const yaw = state.eulerYaw ?? 0;
-  const matrix = orientationMatrixFromInstallEuler(roll, pitch, yaw);
-  const matrixText = [
-    formatMatrixRow(matrix.slice(0, 3)),
-    formatMatrixRow(matrix.slice(3, 6)),
-    formatMatrixRow(matrix.slice(6, 9)),
-  ].join('\n');
+  const matrix = orientationMatrixOrIdentity(state.orientationMatrix);
+  const installEuler = installEulerFromOrientationMatrix(matrix);
   return `
     <section class="panel">
       <h2>${t('flight.heading')}</h2>
@@ -2986,16 +3245,27 @@ function renderFlight() {
             </div>
           </div>
         </div>
-        <div class="row">
-          <label>${t('flight.ratePid')}</label>
-          ${renderNumGrid('fc_rate_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], ratePid, {rowHeader: t('flight.axis')})}
-        </div>
-        <div class="row" id="angle-pid-row" style="display:${angleEnabled ? 'grid' : 'none'}">
-          <label>${t('flight.anglePid')}</label>
-          ${renderNumGrid('fc_angle_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], anglePid, {rowHeader: t('flight.axis')})}
-        </div>
-        <div class="row">
-          <label>${t('flight.mixer')}</label>
+        <section class="flight-setting-card">
+          <div class="flight-setting-card-header"><h3>${t('flight.ratePid')}</h3><p>${t('flight.ratePidHelp')}</p></div>
+          <div class="flight-setting-card-body">${renderNumGrid('fc_rate_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], ratePid, {rowHeader: t('flight.axis')})}</div>
+        </section>
+        <section class="flight-setting-card angle-rate-limit-card" id="angle-rate-limit-card" data-angle-setting style="display:${angleEnabled ? 'block' : 'none'}">
+          <div class="flight-setting-card-header"><h3>${t('flight.angleRateLimits')}</h3><p>${t('flight.angleRateLimitsHelp')}</p></div>
+          <div class="flight-setting-card-body angle-rate-limit-grid">
+            ${[['roll', t('flight.roll'), angleRateLimits[0] ?? 100], ['pitch', t('flight.pitch'), angleRateLimits[1] ?? 100]].map(([axis, label, value]) => `
+              <label class="angle-rate-limit-field" for="fc-angle-rate-limit-${axis}">
+                <span><strong>${label}</strong><small>${t('flight.angleRateLimit')}</small></span>
+                <span class="number-with-unit"><input id="fc-angle-rate-limit-${axis}" name="fc_angle_rate_limit_${axis}_dps" type="number" min="1" max="1000" step="1" value="${escapeHtml(value)}"><small>°/s</small></span>
+              </label>`).join('')}
+          </div>
+        </section>
+        <section class="flight-setting-card" id="angle-pid-row" data-angle-setting style="display:${angleEnabled ? 'block' : 'none'}">
+          <div class="flight-setting-card-header"><h3>${t('flight.anglePid')}</h3><p>${t('flight.anglePidHelp')}</p></div>
+          <div class="flight-setting-card-body">${renderNumGrid('fc_angle_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], anglePid, {rowHeader: t('flight.axis')})}</div>
+        </section>
+        <section class="flight-setting-card">
+          <div class="flight-setting-card-header"><h3>${t('flight.mixer')}</h3><p>${t('flight.mixerHelp')}</p></div>
+          <div class="flight-setting-card-body">
           ${renderNumGrid('fc_mixer', Array.from({length: motors}, (_, i) => `${t('flight.output')} ${i + 1}`), [t('flight.throttle'), t('flight.roll'), t('flight.pitch'), t('flight.yaw')], mixer, {
             rowHeader: t('flight.output'),
             flagName: 'fc-mixer-servo',
@@ -3008,52 +3278,14 @@ function renderFlight() {
             <button class="secondary" type="button" data-action="add-motor" ${state.busy ? 'disabled' : ''}>${t('action.addOutput')}</button>
             <button class="secondary" type="button" data-action="remove-motor" ${state.busy || state.extraMixerRows <= 0 ? 'disabled' : ''}>${t('action.removeOutput')}</button>
           </div>
-        </div>
+          </div>
+        </section>
         <div class="row">
           <label>${t('flight.boardOrientation')}</label>
-          <div class="orientation-editor">
-            <div class="euler-controls">
-              <div class="euler-field">
-                <label for="euler-roll">${t('flight.roll')} <span class="axis-tag">X</span></label>
-                <div class="euler-input-row">
-                  <input type="range" id="euler-roll-slider" data-euler="roll" class="euler-slider" min="-180" max="180" value="${roll}">
-                  <input type="number" id="euler-roll" data-euler="roll" class="euler-number" value="${roll}" step="1" min="-180" max="180">
-                </div>
-              </div>
-              <div class="euler-field">
-                <label for="euler-pitch">${t('flight.pitch')} <span class="axis-tag">Y</span></label>
-                <div class="euler-input-row">
-                  <input type="range" id="euler-pitch-slider" data-euler="pitch" class="euler-slider" min="-180" max="180" value="${pitch}">
-                  <input type="number" id="euler-pitch" data-euler="pitch" class="euler-number" value="${pitch}" step="1" min="-180" max="180">
-                </div>
-              </div>
-              <div class="euler-field">
-                <label for="euler-yaw">${t('flight.yaw')} <span class="axis-tag">Z</span></label>
-                <div class="euler-input-row">
-                  <input type="range" id="euler-yaw-slider" data-euler="yaw" class="euler-slider" min="-180" max="180" value="${yaw}">
-                  <input type="number" id="euler-yaw" data-euler="yaw" class="euler-number" value="${yaw}" step="1" min="-180" max="180">
-                </div>
-              </div>
-            </div>
-            <div class="preview-scene">
-              <div class="preview-scene-inner">
-                <div class="preview-board" id="board-preview" style="transform:${boardPreviewTransform(roll, pitch, yaw)}">
-                  <div class="board-top">
-                    <div class="board-chip">▲</div>
-                    <div class="board-label">${t('flight.boardLabel')}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="matrix-display">${escapeHtml(matrixText)}</div>
-            <div class="helper">${escapeHtml(orientationCalText())}</div>
-            <div class="actions">
-              <button class="secondary" type="button" data-action="quick-orientation" ${state.busy || state.imuCalibration.busy ? 'disabled' : ''}>${escapeHtml(orientationCalButtonText())}</button>
-            </div>
-          </div>
+          ${renderOrientationCalibration(installEuler)}
         </div>
         <div id="angle-imu-calibration" style="display:${angleEnabled ? 'block' : 'none'}">${renderImuCalibration()}</div>
-        <div class="actions"><button class="primary" ${state.busy || state.imuCalibration.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot" ${state.busy || state.imuCalibration.busy ? 'disabled' : ''}>${t('action.reboot')}</button></div>
+        <div class="actions"><button class="primary" ${state.busy || state.imuCalibration.busy || state.orientationCal.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot" ${state.busy || state.imuCalibration.busy || state.orientationCal.busy ? 'disabled' : ''}>${t('action.reboot')}</button></div>
       </form>
     </section>`;
 }
@@ -3526,50 +3758,6 @@ function renderCurrentTab() {
   }[state.tab]();
 }
 
-function wireOrientationPreview() {
-  const sliders = document.querySelectorAll('.euler-slider');
-  const numbers = document.querySelectorAll('.euler-number');
-  const board = document.querySelector('#board-preview');
-  const matrixDisplay = document.querySelector('.matrix-display');
-  if (!sliders.length || !board) return;
-
-  function sync() {
-    const roll = Number(document.querySelector('[data-euler="roll"].euler-number')?.value) || 0;
-    const pitch = Number(document.querySelector('[data-euler="pitch"].euler-number')?.value) || 0;
-    const yaw = Number(document.querySelector('[data-euler="yaw"].euler-number')?.value) || 0;
-    state.eulerRoll = roll;
-    state.eulerPitch = pitch;
-    state.eulerYaw = yaw;
-    board.style.transform = boardPreviewTransform(roll, pitch, yaw);
-    if (matrixDisplay) {
-      const m = orientationMatrixFromInstallEuler(roll, pitch, yaw);
-      matrixDisplay.textContent = [
-        formatMatrixRow(m.slice(0, 3)),
-        formatMatrixRow(m.slice(3, 6)),
-        formatMatrixRow(m.slice(6, 9)),
-      ].join('\n');
-    }
-  }
-
-  sliders.forEach((slider) => {
-    slider.addEventListener('input', () => {
-      const axis = slider.dataset.euler;
-      const numInput = document.querySelector(`[data-euler="${axis}"].euler-number`);
-      if (numInput) numInput.value = slider.value;
-      sync();
-    });
-  });
-
-  numbers.forEach((numInput) => {
-    numInput.addEventListener('input', () => {
-      const axis = numInput.dataset.euler;
-      const slider = document.querySelector(`[data-euler="${axis}"].euler-slider`);
-      if (slider) slider.value = numInput.value;
-      sync();
-    });
-  });
-}
-
 function wirePwmForm() {
   const form = document.querySelector('#pwm-form');
   if (!form) return;
@@ -4016,9 +4204,9 @@ function wireEvents() {
   wireModeRangeEditors();
 
   syncBindingPreview();
-  wireOrientationPreview();
   wirePwmForm();
   initDebugAircraftView();
+  initOrientationAircraftView();
   drawPidCharts();
 
   document.querySelectorAll('[data-action]').forEach((button) => {
@@ -4034,7 +4222,8 @@ function wireEvents() {
       if (action === 'forget') postPlain('/forget', t('message.networkForgotten'));
       if (action === 'add-motor') changeMixerRowCount(1);
       if (action === 'remove-motor') changeMixerRowCount(-1);
-      if (action === 'quick-orientation') quickOrientationStep();
+      if (action === 'orientation-next') void captureOrientationFace();
+      if (action === 'orientation-reset') resetOrientationCalibration();
       if (action === 'accel-next') void captureCurrentAccelFace();
       if (action === 'accel-reset') resetAccelCalibration();
       if (action === 'gyro-calibrate') void calibrateGyro();
@@ -4100,11 +4289,12 @@ function wireModeRangeEditors() {
           input.disabled = disabled;
         });
         if (modeToggle.name === 'fc_angle_enabled') {
-          const anglePid = document.querySelector('#angle-pid-row');
           const angleImu = document.querySelector('#angle-imu-calibration');
-          anglePid?.style.setProperty('display', disabled ? 'none' : 'grid');
+          document.querySelectorAll('[data-angle-setting]').forEach((setting) => {
+            setting.style.setProperty('display', disabled ? 'none' : 'block');
+            setting.querySelectorAll('input, select, button').forEach((input) => { input.disabled = disabled; });
+          });
           angleImu?.style.setProperty('display', disabled ? 'none' : 'block');
-          anglePid?.querySelectorAll('input, select, button').forEach((input) => { input.disabled = disabled; });
           angleImu?.querySelectorAll('input, select, button').forEach((input) => { input.disabled = disabled; });
         }
       };

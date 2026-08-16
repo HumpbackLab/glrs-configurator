@@ -44,7 +44,7 @@ app/
 
 - **HTTP client**: `apiFetch()` and `xhrRequest()` wrap the device HTTP API. In browser dev mode, requests route through the Vite proxy. In Tauri, due to CSP `connect-src 'self' http://* https://*`, requests go direct.
 - **State flow**: User action → mutate `state` → `render()` → `wireEvents()` rebinds listeners. Long operations wrap in `runBusy()` which sets `state.busy` and re-renders.
-- **Flight control**: Euler angle controls (roll/pitch/yaw sliders) update a CSS 3D board preview and a 3×3 orientation matrix. The matrix is transposed on save (`orientationMatrixFromInstallEuler`) because the firmware stores the inverse transform.
+- **Flight control**: A guided two-face raw-accelerometer calibration snaps top-up and nose-up samples to the nearest 90° sensor-axis mapping, then uses the top-up sample for continuous roll/pitch horizon correction. Roll/pitch/yaw are derived from the resulting 3×3 raw-sensor-to-aircraft matrix for read-only display, and the matrix is saved directly.
 - **PWM**: Each output pin encodes as a 32-bit config word with bitfields for mode, input channel, inversion, failsafe position, etc. See `decodePwmConfig()` / `encodePwmConfig()`.
 - **MD5**: Inline implementation used to derive 6-byte UID from binding phrase.
 - **Debug polling**: Calls Tauri Rust commands via `@tauri-apps/api/core` (`invoke()`). The Rust backend handles MSP v2 framing and TCP socket management.
@@ -76,7 +76,7 @@ The ELRS receiver exposes these endpoints (all JSON unless noted):
 
 - The PWM `config` field is a single 32-bit integer, not a JSON object. Always use `encodePwmConfig()` / `decodePwmConfig()`.
 - When saving flight config (`saveFlight`), delete `pwm` from the payload before POSTing to avoid overwriting PWM outputs.
-- The orientation matrix stored in firmware (`fc_orientation`) is the inverse of the physical install angles shown in the UI. `orientationMatrixFromInstallEuler()` transposes the matrix on save.
+- The orientation matrix stored in firmware (`fc_orientation`) rotates raw sensor samples into the aircraft frame. The UI derives read-only physical install Euler angles from its inverse, but never reconstructs or saves the matrix through Euler angles.
 - In dev mode (`localhost`), HTTP requests proxy through Vite middleware using the `target` query param. In Tauri, requests go direct to `state.apiBase`.
 - The `state.extraMixerRows` counter tracks user-added motor rows beyond the firmware-reported mixer count.
 - Binding phrase → UID derivation uses MD5 of `-DMY_BINDING_PHRASE="<phrase>"`.
