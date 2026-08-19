@@ -37,6 +37,7 @@ const state = {
   networks: [],
   message: null,
   busy: false,
+  connectionStatus: 'idle',
   uploadResult: null,
   uploadProgress: null,
   updateSource: loadUpdateSource(),
@@ -64,14 +65,37 @@ const state = {
     error: '',
   },
   extraMixerRows: 0,
-  eulerRoll: 0,
-  eulerPitch: 0,
-  eulerYaw: 0,
-  orientationCal: null,
+  orientationMatrix: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+  orientationCal: {
+    busy: false,
+    samples: Array(2).fill(null),
+    levelCorrectionDeg: null,
+    baseMatrix: null,
+  },
+  imuCalibration: {
+    busy: '',
+    accelFaces: Array(6).fill(null),
+    accelBias: null,
+    accelScale: null,
+    gyroBias: null,
+  },
   debugSample: null,
   debugError: '',
   debugPolling: false,
   debugPollRateHz: 20,
+  pidLogError: '',
+  pidLogMode: 'rate',
+  pidLogSamples: [],
+  pidLogVisible: {},
+  pidLiveReceiving: false,
+  pidLiveStarting: false,
+  pidLivePackets: 0,
+  pidLiveDuplicates: 0,
+  pidLiveLastSequence: null,
+  pidLiveRateHz: 0,
+  pidLiveWindowSeconds: 10,
+  pidChartViews: {},
+  pidChartHover: {},
   profileDraft: null,
   profileOriginal: null,
   profileCompatibility: null,
@@ -99,10 +123,21 @@ const state = {
 let debugPollTimer = null;
 let debugPollInFlight = false;
 let debugPollGeneration = 0;
+let mspDebugConnected = false;
+let mspDebugConnectPromise = null;
 let debugAircraftView = null;
+let orientationAircraftView = null;
 let pwmRuntimeUpdateTimer = null;
 let pwmRuntimeUpdateInFlight = false;
 let pwmRuntimePendingValues = null;
+let pidLiveRateWindow = [];
+let connectionHealthTimer = null;
+let connectionHealthInFlight = false;
+let connectionHealthFailures = 0;
+
+const CONNECTION_HEALTH_INTERVAL_MS = 2000;
+const CONNECTION_HEALTH_TIMEOUT_MS = 1500;
+const CONNECTION_HEALTH_FAILURE_LIMIT = 2;
 
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -383,10 +418,6 @@ function bytesToList(value) {
   return Array.isArray(value) ? value.map((item) => Number(item) || 0) : [];
 }
 
-function listToString(value) {
-  return bytesToList(value).join(',');
-}
-
 function listToPrettyString(value) {
   return bytesToList(value).join(', ');
 }
@@ -397,88 +428,67 @@ function isValidUidByte(value) {
 }
 
 const md5 = (() => {
-  const k = [];
-  for (let i = 0; i < 64;) {
-    k[i] = 0 | (Math.abs(Math.sin(++i)) * 4294967296);
-  }
+  const constants = Array.from(
+    {length: 64},
+    (_, index) => 0 | (Math.abs(Math.sin(index + 1)) * 4294967296),
+  );
+  const shifts = [
+    7, 12, 17, 22,
+    5, 9, 14, 20,
+    4, 11, 16, 23,
+    6, 10, 15, 21,
+  ];
 
-  function calcMD5(str) {
-    let b;
-    let c;
-    let d;
-    let j;
-    const x = [];
-    const str2 = unescape(encodeURI(str));
-    let a = str2.length;
-    const h = [b = 1732584193, c = -271733879, ~b, ~c];
-    let i = 0;
-
-    for (; i <= a;) x[i >> 2] |= (str2.charCodeAt(i) || 128) << 8 * (i++ % 4);
-
-    str = (a + 8 >> 6) * 16 + 14;
-    x[str] = a * 8;
-    i = 0;
-
-    for (; i < str; i += 16) {
-      a = h; j = 0;
-      for (; j < 64;) {
-        a = [
-          d = a[3],
-          ((b = a[1] | 0) +
-            ((d = (
-              (a[0] +
-                [
-                  b & (c = a[2]) | ~b & d,
-                  d & b | ~d & c,
-                  b ^ c ^ d,
-                  c ^ (b | ~d)
-                ][a = j >> 4]
-              ) +
-              (k[j] +
-                (x[[
-                  j,
-                  5 * j + 1,
-                  3 * j + 5,
-                  7 * j
-                ][a] % 16 + i] | 0)
-              )
-            )) << (a = [
-              7, 12, 17, 22,
-              5, 9, 14, 20,
-              4, 11, 16, 23,
-              6, 10, 15, 21
-            ][4 * a + j++ % 4]) | d >>> 32 - a)
-          ),
-          b,
-          c
-        ];
-      }
-      for (j = 4; j;) h[--j] = h[j] + a[j];
+  function calcMD5(input) {
+    let bytes;
+    if (typeof input === 'string') {
+      const encoded = unescape(encodeURI(input));
+      bytes = Uint8Array.from(encoded, (character) => character.charCodeAt(0));
+    } else {
+      bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
     }
 
-    str = [];
-    for (; j < 32;) str.push(((h[j >> 3] >> ((1 ^ j++ & 7) * 4)) & 15) * 16 + ((h[j >> 3] >> ((1 ^ j++ & 7) * 4)) & 15));
+    const words = [];
+    for (let index = 0; index < bytes.length; ++index) {
+      words[index >> 2] = (words[index >> 2] || 0) | (bytes[index] << (8 * (index % 4)));
+    }
+    words[bytes.length >> 2] = (words[bytes.length >> 2] || 0) | (0x80 << (8 * (bytes.length % 4)));
+    const finalLengthIndex = ((bytes.length + 8 >> 6) * 16) + 14;
+    words[finalLengthIndex] = bytes.length * 8;
 
-    return new Uint8Array(str);
+    let hash = [1732584193, -271733879, -1732584194, 271733878];
+    for (let block = 0; block < finalLengthIndex; block += 16) {
+      let state = hash.slice();
+      for (let round = 0; round < 64; ++round) {
+        const group = round >> 4;
+        const b = state[1];
+        const c = state[2];
+        const d = state[3];
+        const mixed = [
+          (b & c) | (~b & d),
+          (d & b) | (~d & c),
+          b ^ c ^ d,
+          c ^ (b | ~d),
+        ][group];
+        const wordIndex = [round, 5 * round + 1, 3 * round + 5, 7 * round][group] % 16;
+        const value = (state[0] + mixed + constants[round] + (words[block + wordIndex] || 0)) | 0;
+        const shift = shifts[group * 4 + (round % 4)];
+        const rotated = (value << shift) | (value >>> (32 - shift));
+        state = [d, (b + rotated) | 0, b, c];
+      }
+      hash = hash.map((value, index) => (value + state[index]) | 0);
+    }
+
+    const output = new Uint8Array(16);
+    hash.forEach((value, word) => {
+      for (let byte = 0; byte < 4; ++byte) {
+        output[word * 4 + byte] = (value >>> (byte * 8)) & 0xff;
+      }
+    });
+    return output;
   }
   return calcMD5;
 })();
-
-function formatNumberList(value, rowSize) {
-  if (!Array.isArray(value)) return '';
-  const rows = [];
-  for (let i = 0; i < value.length; i += rowSize) {
-    rows.push(value.slice(i, i + rowSize).join(', '));
-  }
-  return rows.join('\n');
-}
-
-function parseNumberList(value) {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  const parsed = trimmed.split(/[\s,]+/).filter(Boolean).map(Number);
-  return parsed.some((item) => Number.isNaN(item)) ? null : parsed;
-}
 
 function pwmConnected() {
   return !!state.target;
@@ -501,10 +511,6 @@ function pwmEntries() {
     return dummy;
   }
   return [];
-}
-
-function pwmAvailable() {
-  return pwmEntries().length > 0;
 }
 
 function pwmOutputLimits() {
@@ -698,14 +704,6 @@ function intOrDefault(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function validateArray(label, value, rowSize, exactLength) {
-  if (value === undefined) return true;
-  if (value === null) throw new Error(t('error.validateArrayInvalid', {label}));
-  if (exactLength && value.length !== exactLength) throw new Error(t('error.validateArrayLength', {label, exactLength}));
-  if (!exactLength && value.length % rowSize !== 0) throw new Error(t('error.validateArrayAlignment', {label, rowSize}));
-  return true;
-}
-
 async function loadDevice() {
   const [target, configResponse, hardwareResponse] = await Promise.all([
     apiFetch('/target'),
@@ -713,8 +711,17 @@ async function loadDevice() {
     apiFetch('/hardware.json').catch(() => ({})),
   ]);
   state.target = target;
+  state.connectionStatus = 'connected';
+  connectionHealthFailures = 0;
   state.configResponse = configResponse;
   state.hardware = hardwareResponse;
+  state.imuCalibration = {
+    busy: '',
+    accelFaces: Array(6).fill(null),
+    accelBias: null,
+    accelScale: null,
+    gyroBias: null,
+  };
   const currentFirmwareVersion = (target?.version || '').split(/\s+/, 1)[0];
   const hasDownloadedFirmware = state.firmwareUpdate.status === 'downloaded'
     && Boolean(state.firmwareUpdate.path)
@@ -765,22 +772,77 @@ async function loadDevice() {
       const {draft} = validateProfile(state.profileOriginal, {deviceAware: true});
       state.profileDraft = draft;
       state.profileImportError = '';
-      if (draft.flight) {
-        [state.eulerRoll, state.eulerPitch, state.eulerYaw] = installEulerFromOrientationMatrix(draft.flight.fc_orientation);
-      }
+      if (draft.flight) state.orientationMatrix = orientationMatrixOrIdentity(draft.flight.fc_orientation);
     } catch (error) {
       state.profileImportError = error.message || String(error);
     }
   }
   if (!state.profileDraft?.flight) {
     const orient = (configResponse?.config?.fc_orientation || []).length === 9 ? configResponse.config.fc_orientation : [];
-    const [roll, pitch, yaw] = installEulerFromOrientationMatrix(orient);
-    state.eulerRoll = roll;
-    state.eulerPitch = pitch;
-    state.eulerYaw = yaw;
+    state.orientationMatrix = orientationMatrixOrIdentity(orient);
   }
+  state.orientationCal.samples = Array(2).fill(null);
+  state.orientationCal.levelCorrectionDeg = null;
+  state.orientationCal.baseMatrix = null;
   if (!state.bindingPhrase) {
     state.bindingPhrase = '';
+  }
+}
+
+async function connectDevice(successText) {
+  state.connectionStatus = 'connecting';
+  render();
+  await runBusy(async () => {
+    try {
+      await loadDevice();
+    } catch (error) {
+      state.connectionStatus = 'error';
+      state.target = null;
+      throw error;
+    }
+  }, successText);
+}
+
+function scheduleConnectionHealthCheck() {
+  if (connectionHealthTimer) return;
+  connectionHealthTimer = window.setTimeout(async () => {
+    connectionHealthTimer = null;
+    await checkConnectionHealth();
+    scheduleConnectionHealthCheck();
+  }, CONNECTION_HEALTH_INTERVAL_MS);
+}
+
+async function checkConnectionHealth() {
+  if (state.connectionStatus !== 'connected' || state.busy || connectionHealthInFlight) return;
+  connectionHealthInFlight = true;
+  try {
+    await apiFetch('/target', {timeout: CONNECTION_HEALTH_TIMEOUT_MS, cache: 'no-store'});
+    connectionHealthFailures = 0;
+  } catch {
+    connectionHealthFailures += 1;
+    if (connectionHealthFailures >= CONNECTION_HEALTH_FAILURE_LIMIT && state.connectionStatus === 'connected') {
+      state.connectionStatus = 'idle';
+      state.target = null;
+      state.configResponse = null;
+      state.hardware = null;
+      connectionHealthFailures = 0;
+      render();
+    }
+  } finally {
+    connectionHealthInFlight = false;
+  }
+}
+
+function connectionStatusLabel() {
+  switch (state.connectionStatus) {
+    case 'connected':
+      return t('connection.connected');
+    case 'connecting':
+      return t('connection.connecting');
+    case 'error':
+      return t('connection.error');
+    default:
+      return t('connection.disconnected');
   }
 }
 
@@ -924,6 +986,14 @@ async function saveFlight(event) {
       if (start < 900 || end > 2100 || start >= end) throw new Error(`${t('message.invalidRange')}: ${mode.toUpperCase()}`);
       nextConfig.fc_mode_conditions[mode] = [channel, start, end];
     });
+    nextConfig.fc_wifi_conditions = {};
+    if (form.fc_wifi_coexist_enabled.checked) {
+      const channel = intOrDefault(form.fc_wifi_coexist_channel.value, 7);
+      const start = intOrDefault(form.fc_wifi_coexist_start.value, 0);
+      const end = intOrDefault(form.fc_wifi_coexist_end.value, 0);
+      if (start < 900 || end > 2100 || start >= end) throw new Error(`${t('message.invalidRange')}: ${t('flight.wifiCoexist')}`);
+      nextConfig.fc_wifi_conditions.coexist = [channel, start, end];
+    }
     nextConfig.fc_arm_enabled = form.fc_arm_enabled.checked;
     nextConfig.fc_arm_channel = intOrDefault(form.fc_arm_channel.value, 5);
     const armStart = intOrDefault(form.fc_arm_start.value, 0);
@@ -931,7 +1001,18 @@ async function saveFlight(event) {
     if (armStart < 900 || armEnd > 2100 || armStart >= armEnd) throw new Error(`${t('message.invalidRange')}: ARM`);
     nextConfig.fc_arm_range = [armStart, armEnd];
     nextConfig.fc_rate_pid = readNumGrid(form, 'fc_rate_pid', 3, 4);
-    nextConfig.fc_angle_pid = readNumGrid(form, 'fc_angle_pid', 3, 4);
+    const angleEnabled = form.fc_angle_enabled.checked;
+    if (angleEnabled) {
+      nextConfig.fc_angle_pid = readNumGrid(form, 'fc_angle_pid', 3, 4);
+      const angleRateLimits = [
+        Number(form.fc_angle_rate_limit_roll_dps.value),
+        Number(form.fc_angle_rate_limit_pitch_dps.value),
+      ];
+      if (angleRateLimits.some((value) => !Number.isInteger(value) || value < 1 || value > 1000)) {
+        throw new Error(t('error.invalidAngleRateLimit'));
+      }
+      nextConfig.fc_angle_rate_limits_dps = angleRateLimits;
+    }
     const dtermLpfHz = intOrDefault(form.fc_dterm_lpf_hz.value, 20);
     if (dtermLpfHz < 0 || dtermLpfHz > 100 || (dtermLpfHz > 0 && dtermLpfHz < 5)) {
       throw new Error(t('error.invalidDtermLpf'));
@@ -944,7 +1025,23 @@ async function saveFlight(event) {
     nextConfig.fc_gyro_lpf_hz = gyroLpfHz;
     nextConfig.fc_mixer = readNumGrid(form, 'fc_mixer', motorCount(), 4);
     nextConfig.fc_mixer_servos = readMixerServos(form, motorCount());
-    nextConfig.fc_orientation = orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw);
+    nextConfig.fc_orientation = orientationMatrixOrIdentity(state.orientationMatrix).map(round4);
+    if (angleEnabled) {
+      nextConfig.fc_gyro_bias = readNumGrid(form, 'fc_gyro_bias', 1, 3);
+      nextConfig.fc_accel_bias = readNumGrid(form, 'fc_accel_bias', 1, 3);
+      nextConfig.fc_accel_scale = readNumGrid(form, 'fc_accel_scale', 1, 3);
+    }
+    if (angleEnabled) {
+      if (nextConfig.fc_gyro_bias.some((value) => Math.abs(value) > 100)) {
+        throw new Error(t('error.gyroBiasRange'));
+      }
+      if (nextConfig.fc_accel_bias.some((value) => Math.abs(value) > 20)) {
+        throw new Error(t('error.accelBiasRange'));
+      }
+      if (nextConfig.fc_accel_scale.some((value) => value <= 0.5 || value >= 1.5)) {
+        throw new Error(t('error.accelScaleRange'));
+      }
+    }
     delete nextConfig.pwm;
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(nextConfig)});
     if (state.profileDraft) {
@@ -973,16 +1070,6 @@ function normalizeVector(v) {
   return v.map((value) => value / length);
 }
 
-function nearestCardinalAxis(v) {
-  const axis = [0, 0, 0];
-  let best = 0;
-  for (let i = 1; i < 3; i += 1) {
-    if (Math.abs(v[i]) > Math.abs(v[best])) best = i;
-  }
-  axis[best] = v[best] >= 0 ? 1 : -1;
-  return axis;
-}
-
 function dotVector(a, b) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
@@ -995,90 +1082,316 @@ function crossVector(a, b) {
   ];
 }
 
-function normalizeCardinalAngle(degrees) {
-  let value = Math.round(degrees / 90) * 90;
-  while (value > 180) value -= 360;
-  while (value < -180) value += 360;
-  return value;
+function nearestCardinalAxis(vector) {
+  const absolute = vector.map(Math.abs);
+  const axis = absolute.indexOf(Math.max(...absolute));
+  const result = [0, 0, 0];
+  result[axis] = vector[axis] >= 0 ? 1 : -1;
+  return result;
 }
 
-async function sampleRawAccel(sampleCount = 24, delayMs = 40) {
-  const sum = [0, 0, 0];
-  let valid = 0;
+function multiplyMatrix3(left, right) {
+  const result = Array(9).fill(0);
+  for (let row = 0; row < 3; row += 1) {
+    for (let column = 0; column < 3; column += 1) {
+      for (let index = 0; index < 3; index += 1) {
+        result[row * 3 + column] += left[row * 3 + index] * right[index * 3 + column];
+      }
+    }
+  }
+  return result;
+}
+
+async function sampleRawImu(sensor, sampleCount, delayMs, frame = 'raw') {
+  const samples = [];
+  let transformedFrameAvailable = false;
   for (let i = 0; i < sampleCount; i += 1) {
     const status = await apiFetch('/status.json', {timeout: 2000});
     const imu = status?.imu || {};
-    const accel = imu['accel-mps2'];
-    if (imu['accel-valid'] && accel) {
-      const x = Number(accel.x);
-      const y = Number(accel.y);
-      const z = Number(accel.z);
+    if (imu['tf-frame'] === 'aircraft') transformedFrameAvailable = true;
+    const key = `${frame === 'tf' ? 'tf-' : ''}${sensor === 'gyro' ? 'gyro-dps' : 'accel-mps2'}`;
+    const value = imu[key];
+    const valid = sensor === 'gyro' ? imu['gyro-ready'] : imu['accel-valid'];
+    if (valid && value) {
+      const x = Number(value.x);
+      const y = Number(value.y);
+      const z = Number(value.z);
       if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-        sum[0] += x;
-        sum[1] += y;
-        sum[2] += z;
-        valid += 1;
+        samples.push([x, y, z]);
       }
     }
     if (i + 1 < sampleCount) await sleep(delayMs);
   }
-  if (valid < Math.ceil(sampleCount * 0.75)) {
-    throw new Error(t('error.notEnoughSamples'));
+  if (frame === 'tf' && !transformedFrameAvailable) {
+    throw new Error(t('error.tfImuUnavailable'));
   }
-  return normalizeVector(sum.map((value) => value / valid));
+  if (samples.length < Math.ceil(sampleCount * 0.75)) {
+    throw new Error(t('error.notEnoughImuSamples'));
+  }
+  const mean = [0, 1, 2].map((axis) => samples.reduce((sum, value) => sum + value[axis], 0) / samples.length);
+  const stddev = [0, 1, 2].map((axis) => Math.sqrt(samples.reduce((sum, value) => {
+    const delta = value[axis] - mean[axis];
+    return sum + delta * delta;
+  }, 0) / samples.length));
+  const range = [0, 1, 2].map((axis) => {
+    const values = samples.map((value) => value[axis]);
+    return Math.max(...values) - Math.min(...values);
+  });
+  return {mean, stddev, range, count: samples.length};
 }
 
-function orientationEulerFromSamples(levelRaw, forwardRaw) {
-  // Firmware expects fc_orientation to rotate raw IMU axes into the internal frame.
-  // Level gravity maps to internal +Z; nose-up gravity maps to internal +X.
-  // The resulting matrix is therefore the firmware matrix, not the user-facing
-  // physical install attitude. Convert it back before filling the UI controls.
+const STANDARD_GRAVITY = 9.80665;
+const ACCEL_CAL_FACES = [
+  {axis: 0, sign: 1, label: 'imuCalibration.faceXPos'},
+  {axis: 0, sign: -1, label: 'imuCalibration.faceXNeg'},
+  {axis: 1, sign: 1, label: 'imuCalibration.faceYPos'},
+  {axis: 1, sign: -1, label: 'imuCalibration.faceYNeg'},
+  {axis: 2, sign: 1, label: 'imuCalibration.faceZPos'},
+  {axis: 2, sign: -1, label: 'imuCalibration.faceZNeg'},
+];
+const ORIENTATION_CAL_STEPS = [
+  {faceIndex: 4, label: 'orient.topUp'},
+  {faceIndex: 0, label: 'orient.noseUp'},
+];
+const MAX_ORIENTATION_LEVEL_CORRECTION_DEG = 30;
+const MAX_ORIENTATION_NOSE_ERROR_DEG = 25;
+const MAX_ORIENTATION_POSE_DOT = Math.cos(70 * Math.PI / 180);
+
+function roundedImuVector(values) {
+  return values.map((value) => Number(value.toFixed(6)));
+}
+
+function calculateAccelCalibration(faces) {
+  const bias = [];
+  const scale = [];
+  for (let axis = 0; axis < 3; axis += 1) {
+    const positive = faces[axis * 2].mean[axis];
+    const negative = faces[axis * 2 + 1].mean[axis];
+    const span = positive - negative;
+    const nextScale = (2 * STANDARD_GRAVITY) / span;
+    if (!Number.isFinite(nextScale) || nextScale <= 0.5 || nextScale >= 1.5) {
+      throw new Error(t('error.accelCalibrationRange'));
+    }
+    bias.push((positive + negative) / 2);
+    scale.push(nextScale);
+  }
+  return {bias: roundedImuVector(bias), scale: roundedImuVector(scale)};
+}
+
+function detectAccelFace(mean) {
+  const absolute = mean.map(Math.abs);
+  const axis = absolute.indexOf(Math.max(...absolute));
+  const sign = mean[axis] >= 0 ? 1 : -1;
+  const index = ACCEL_CAL_FACES.findIndex((face) => face.axis === axis && face.sign === sign);
+  const crossMagnitude = Math.hypot(...mean.filter((_, candidateAxis) => candidateAxis !== axis));
+  if (index < 0 || absolute[axis] < 7.0 || crossMagnitude > 4.5) return -1;
+  return index;
+}
+
+async function captureCurrentAccelFace() {
+  if (state.busy || state.imuCalibration.busy || state.orientationCal.busy) return;
+  state.imuCalibration.busy = 'accel-detect';
+  render();
+  try {
+    // Firmware exposes tf-accel-mps2 after board-orientation TF but before
+    // bias/scale calibration, which is exactly the frame needed here.
+    const sample = await sampleRawImu('accel', 32, 35, 'tf');
+    const magnitude = vectorLength(sample.mean);
+    if (Math.max(...sample.stddev) > 0.35 || Math.max(...sample.range) > 1.5) {
+      throw new Error(t('error.imuMoved'));
+    }
+    if (magnitude < 7.5 || magnitude > 12.2) {
+      throw new Error(t('error.accelMagnitude'));
+    }
+    const index = detectAccelFace(sample.mean);
+    if (index < 0) throw new Error(t('error.accelFaceUnclear'));
+    const face = ACCEL_CAL_FACES[index];
+    if (state.imuCalibration.accelFaces[index]) {
+      throw new Error(t('error.accelFaceDuplicate', {face: t(face.label)}));
+    }
+    state.imuCalibration.accelFaces[index] = sample;
+    if (state.imuCalibration.accelFaces.every(Boolean)) {
+      const result = calculateAccelCalibration(state.imuCalibration.accelFaces);
+      state.imuCalibration.accelBias = result.bias;
+      state.imuCalibration.accelScale = result.scale;
+      state.message = {type: 'ok', text: t('imuCalibration.accelComplete')};
+    } else {
+      state.message = {type: 'ok', text: t('imuCalibration.faceCaptured', {face: t(face.label)})};
+    }
+  } catch (error) {
+    state.message = {type: 'error', text: error.message || String(error)};
+  } finally {
+    state.imuCalibration.busy = '';
+    render();
+  }
+}
+
+async function calibrateGyro() {
+  if (state.busy || state.imuCalibration.busy || state.orientationCal.busy) return;
+  state.imuCalibration.busy = 'gyro';
+  render();
+  try {
+    const sample = await sampleRawImu('gyro', 64, 30, 'tf');
+    if (Math.max(...sample.stddev) > 0.8 || Math.max(...sample.range) > 4.0) {
+      throw new Error(t('error.gyroMoved'));
+    }
+    if (sample.mean.some((value) => Math.abs(value) > 100)) {
+      throw new Error(t('error.gyroBiasRange'));
+    }
+    state.imuCalibration.gyroBias = roundedImuVector(sample.mean);
+    state.message = {type: 'ok', text: t('imuCalibration.gyroComplete')};
+  } catch (error) {
+    state.message = {type: 'error', text: error.message || String(error)};
+  } finally {
+    state.imuCalibration.busy = '';
+    render();
+  }
+}
+
+function resetAccelCalibration() {
+  if (state.imuCalibration.busy) return;
+  state.imuCalibration.accelFaces = Array(6).fill(null);
+  state.imuCalibration.accelBias = null;
+  state.imuCalibration.accelScale = null;
+  state.message = null;
+  render();
+}
+
+function determinantMatrix3(m) {
+  return m[0] * (m[4] * m[8] - m[5] * m[7])
+    - m[1] * (m[3] * m[8] - m[5] * m[6])
+    + m[2] * (m[3] * m[7] - m[4] * m[6]);
+}
+
+function inverseTransposeMatrix3(m) {
+  const determinant = determinantMatrix3(m);
+  if (!Number.isFinite(determinant) || Math.abs(determinant) < 0.000001) {
+    throw new Error(t('error.orientationFit'));
+  }
+  return [
+    (m[4] * m[8] - m[5] * m[7]) / determinant,
+    (m[5] * m[6] - m[3] * m[8]) / determinant,
+    (m[3] * m[7] - m[4] * m[6]) / determinant,
+    (m[2] * m[7] - m[1] * m[8]) / determinant,
+    (m[0] * m[8] - m[2] * m[6]) / determinant,
+    (m[1] * m[6] - m[0] * m[7]) / determinant,
+    (m[1] * m[5] - m[2] * m[4]) / determinant,
+    (m[2] * m[3] - m[0] * m[5]) / determinant,
+    (m[0] * m[4] - m[1] * m[3]) / determinant,
+  ];
+}
+
+function nearestRotationMatrix3(candidate) {
+  if (determinantMatrix3(candidate) <= 0.05) throw new Error(t('error.orientationFit'));
+  let matrix = candidate.map(Number);
+  // Newton polar decomposition removes floating-point drift and projects onto SO(3).
+  for (let iteration = 0; iteration < 12; iteration += 1) {
+    const inverseTranspose = inverseTransposeMatrix3(matrix);
+    matrix = matrix.map((value, index) => (value + inverseTranspose[index]) / 2);
+  }
+  if (determinantMatrix3(matrix) < 0.999) throw new Error(t('error.orientationFit'));
+  return matrix.map(round4);
+}
+
+function rotateVector3(matrix, vector) {
+  return [
+    dotVector(matrix.slice(0, 3), vector),
+    dotVector(matrix.slice(3, 6), vector),
+    dotVector(matrix.slice(6, 9), vector),
+  ];
+}
+
+function calculateOrientationMatrix(samples) {
+  if (!samples.every(Boolean)) throw new Error(t('error.orientationIncomplete'));
+  const levelRaw = normalizeVector(samples[0].mean);
+  const noseRaw = normalizeVector(samples[1].mean);
+  if (Math.abs(dotVector(levelRaw, noseRaw)) > MAX_ORIENTATION_POSE_DOT) {
+    throw new Error(t('error.orientationPosesNotPerpendicular'));
+  }
+
+  // First identify the nearest 90-degree sensor-to-aircraft axis mapping.
   const rowZ = nearestCardinalAxis(levelRaw);
-  const rowX = nearestCardinalAxis(forwardRaw);
+  const rowX = nearestCardinalAxis(noseRaw);
   if (Math.abs(dotVector(rowX, rowZ)) > 0) {
-    throw new Error(t('error.sameAxis'));
+    throw new Error(t('error.orientationSameAxis'));
   }
   const rowY = crossVector(rowZ, rowX);
-  const matrix = [...rowX, ...rowY, ...rowZ];
-  const [roll, pitch, yaw] = installEulerFromOrientationMatrix(matrix).map(normalizeCardinalAngle);
-  return {roll, pitch, yaw, matrix};
-}
+  const coarseMatrix = [...rowX, ...rowY, ...rowZ];
 
-function orientationCalText() {
-  if (state.orientationCal?.level) {
-    return t('orient.instructionNoseUp');
+  // The first pose is also the horizon reference. Preserve the snapped yaw,
+  // then add continuous roll/pitch so its gravity vector maps exactly to +Z.
+  const coarseLevel = normalizeVector(rotateVector3(coarseMatrix, levelRaw));
+  const roll = Math.atan2(coarseLevel[1], coarseLevel[2]);
+  const pitch = Math.atan2(-coarseLevel[0], Math.hypot(coarseLevel[1], coarseLevel[2]));
+  const rollDeg = deg(roll);
+  const pitchDeg = deg(pitch);
+  if (Math.abs(rollDeg) > MAX_ORIENTATION_LEVEL_CORRECTION_DEG
+      || Math.abs(pitchDeg) > MAX_ORIENTATION_LEVEL_CORRECTION_DEG) {
+    throw new Error(t('error.orientationLevelTiltTooLarge'));
   }
-  return t('orient.instructionLevel');
-}
 
-function orientationCalButtonText() {
-  if (state.orientationCal?.level) {
-    return t('orient.sampleNoseUp');
+  const cr = Math.cos(roll), sr = Math.sin(roll);
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const rollCorrection = [1, 0, 0, 0, cr, -sr, 0, sr, cr];
+  const pitchCorrection = [cp, 0, sp, 0, 1, 0, -sp, 0, cp];
+  const levelCorrection = multiplyMatrix3(pitchCorrection, rollCorrection);
+  const matrix = nearestRotationMatrix3(multiplyMatrix3(levelCorrection, coarseMatrix));
+
+  const transformedNose = normalizeVector(rotateVector3(matrix, noseRaw));
+  const noseErrorDeg = deg(Math.acos(clamp(transformedNose[0], -1, 1)));
+  if (noseErrorDeg > MAX_ORIENTATION_NOSE_ERROR_DEG) {
+    throw new Error(t('error.orientationNoseMismatch'));
   }
-  return t('orient.sampleLevel');
+  return {
+    matrix,
+    levelCorrectionDeg: [round4(rollDeg), round4(pitchDeg)],
+  };
 }
 
-function setEulerAngles(roll, pitch, yaw) {
-  state.eulerRoll = roll;
-  state.eulerPitch = pitch;
-  state.eulerYaw = yaw;
-}
-
-async function quickOrientationStep() {
-  await runBusy(async () => {
-    if (!state.orientationCal?.level) {
-      const level = await sampleRawAccel();
-      state.orientationCal = {level};
-      setMessage('ok', t('orient.levelCaptured'));
-      return;
+async function captureOrientationFace() {
+  if (state.busy || state.orientationCal.busy || state.imuCalibration.busy) return;
+  const index = state.orientationCal.samples.findIndex((sample) => !sample);
+  if (index < 0) return;
+  if (!state.orientationCal.samples.some(Boolean)) {
+    state.orientationCal.baseMatrix = orientationMatrixOrIdentity(state.orientationMatrix).slice();
+  }
+  state.orientationCal.busy = true;
+  render();
+  try {
+    const sample = await sampleRawImu('accel', 32, 35, 'raw');
+    const magnitude = vectorLength(sample.mean);
+    if (Math.max(...sample.stddev) > 0.35 || Math.max(...sample.range) > 1.5) {
+      throw new Error(t('error.imuMoved'));
     }
+    if (magnitude < 7.5 || magnitude > 12.2) throw new Error(t('error.accelMagnitude'));
+    state.orientationCal.samples[index] = sample;
+    if (state.orientationCal.samples.every(Boolean)) {
+      const result = calculateOrientationMatrix(state.orientationCal.samples);
+      state.orientationMatrix = result.matrix;
+      state.orientationCal.levelCorrectionDeg = result.levelCorrectionDeg;
+      setMessage('ok', t('orient.complete', {
+        roll: result.levelCorrectionDeg[0].toFixed(1),
+        pitch: result.levelCorrectionDeg[1].toFixed(1),
+      }));
+    } else {
+      setMessage('ok', t('orient.topCaptured'));
+    }
+  } catch (error) {
+    setMessage('error', error.message || String(error));
+  } finally {
+    state.orientationCal.busy = false;
+    render();
+  }
+}
 
-    const forward = await sampleRawAccel();
-    const result = orientationEulerFromSamples(state.orientationCal.level, forward);
-    setEulerAngles(result.roll, result.pitch, result.yaw);
-    state.orientationCal = null;
-    setMessage('ok', t('orient.setResult', {roll: result.roll, pitch: result.pitch, yaw: result.yaw}));
-  });
+function resetOrientationCalibration() {
+  if (state.orientationCal.busy || state.imuCalibration.busy) return;
+  if (state.orientationCal.baseMatrix) state.orientationMatrix = state.orientationCal.baseMatrix.slice();
+  state.orientationCal.samples = Array(2).fill(null);
+  state.orientationCal.levelCorrectionDeg = null;
+  state.orientationCal.baseMatrix = null;
+  state.message = null;
+  render();
 }
 
 async function saveHardwareJson(event) {
@@ -1110,21 +1423,45 @@ async function saveHomeNetwork(event) {
 }
 
 async function postPlain(path, successText) {
+  if (state.busy) return;
   await runBusy(async () => {
     await apiFetch(path, {method: 'POST', body: new FormData()});
   }, successText);
 }
 
+async function rebootDevice() {
+  if (state.busy) return;
+  await runBusy(async () => {
+    // Older receiver firmware labels its plain-text reboot acknowledgement as
+    // JSON. xhrRequest deliberately tolerates that legacy response.
+    await xhrRequest('/reboot', {method: 'POST', body: new FormData(), timeout: 3000});
+    // Keep the action locked while the old device instance is shutting down.
+    // This prevents repeated software resets if the user clicks again before
+    // the receiver has had a chance to boot and resume ELRS reception.
+    await new Promise((resolve) => window.setTimeout(resolve, 1500));
+  }, t('message.rebootRequested'));
+}
+
 async function uploadFirmwareFile(file) {
   await runBusy(async () => {
-    state.uploadProgress = {loaded: 0, total: file.size, phase: t('update.phase.uploading')};
+    state.uploadProgress = {loaded: 0, total: file.size, phase: t('update.phase.verifying')};
     render();
+    const fileBytes = new Uint8Array(await file.arrayBuffer());
+    if ((state.target?.target || '').toUpperCase().includes('ESP32')) {
+      validateUnifiedEsp32Firmware(fileBytes);
+    }
+    const fileMd5 = md5Hex(fileBytes);
     const form = new FormData();
     form.set('update[]', file, file.name);
+    state.uploadProgress = {loaded: 0, total: file.size, phase: t('update.phase.uploading')};
+    render();
     const result = await xhrRequest('/update', {
       method: 'POST',
       body: form,
-      headers: {'X-FileSize': String(file.size)},
+      headers: {
+        'X-FileSize': String(file.size),
+        'X-File-MD5': fileMd5,
+      },
       timeout: 90000,
       onUploadProgress: (progressEvent) => {
         state.uploadProgress = {
@@ -1507,6 +1844,110 @@ function updateDebugAircraftAttitude(sample) {
   debugAircraftView.render();
 }
 
+const ORIENTATION_FACE_ATTITUDES = {
+  0: {roll: 0, pitch: -90, yaw: 0},
+  1: {roll: 0, pitch: 90, yaw: 0},
+  2: {roll: 90, pitch: 0, yaw: 0},
+  3: {roll: -90, pitch: 0, yaw: 0},
+  4: {roll: 0, pitch: 0, yaw: 0},
+  5: {roll: 180, pitch: 0, yaw: 0},
+};
+
+function currentOrientationFaceIndex() {
+  const stepIndex = state.orientationCal.samples.findIndex((sample) => !sample);
+  return ORIENTATION_CAL_STEPS[stepIndex >= 0 ? stepIndex : ORIENTATION_CAL_STEPS.length - 1].faceIndex;
+}
+
+function disposeOrientationAircraftView() {
+  if (!orientationAircraftView) return;
+  window.removeEventListener('resize', orientationAircraftView.resize);
+  orientationAircraftView.renderer?.dispose();
+  orientationAircraftView = null;
+}
+
+function updateOrientationAircraftPose() {
+  if (!orientationAircraftView?.model) return;
+  const attitude = ORIENTATION_FACE_ATTITUDES[currentOrientationFaceIndex()];
+  orientationAircraftView.model.rotation.x = attitude.roll * DEG_TO_RAD;
+  orientationAircraftView.model.rotation.z = attitude.pitch * -DEG_TO_RAD;
+  orientationAircraftView.modelWrapper.rotation.y = attitude.yaw * DEG_TO_RAD;
+  orientationAircraftView.render();
+}
+
+function initOrientationAircraftView() {
+  const canvas = document.getElementById('orientation-aircraft-canvas');
+  const wrapper = document.getElementById('orientation-aircraft-wrapper');
+  if (!canvas || !wrapper) {
+    disposeOrientationAircraftView();
+    return;
+  }
+  if (orientationAircraftView?.canvas === canvas) {
+    orientationAircraftView.resize();
+    return;
+  }
+  disposeOrientationAircraftView();
+
+  const renderer = new THREE.WebGLRenderer({canvas, alpha: true, antialias: true, preserveDrawingBuffer: true});
+  renderer.setClearColor(0x000000, 0);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+  camera.position.set(0, 1.5, 7);
+  camera.lookAt(0, 0, 0);
+  const modelWrapper = new THREE.Object3D();
+  let model = createFallbackAircraft();
+  model.scale.set(1.4, 1.4, 1.4);
+  modelWrapper.add(model);
+  scene.add(modelWrapper);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x9aa4b2, 1.1));
+  const keyLight = new THREE.DirectionalLight(0xffffff, 1.8);
+  keyLight.position.set(2.5, 4, 3);
+  scene.add(keyLight);
+
+  const view = {
+    canvas,
+    renderer,
+    scene,
+    camera,
+    modelWrapper,
+    get model() { return model; },
+    set model(nextModel) {
+      modelWrapper.remove(model);
+      model = nextModel;
+      modelWrapper.add(model);
+    },
+    resize() {
+      const rect = wrapper.getBoundingClientRect();
+      const width = Math.max(1, Math.floor(rect.width));
+      const height = Math.max(1, Math.floor(rect.height));
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      updateOrientationAircraftPose();
+    },
+    render() { renderer.render(scene, camera); },
+  };
+  orientationAircraftView = view;
+  window.addEventListener('resize', view.resize);
+
+  new GLTFLoader().load(
+    '/models/model_rudderless_plane.gltf',
+    (gltf) => {
+      if (orientationAircraftView !== view) return;
+      const loadedModel = gltf.scene;
+      loadedModel.scale.set(0.5, 0.5, 0.5);
+      const box = new THREE.Box3().setFromObject(loadedModel);
+      const center = box.getCenter(new THREE.Vector3());
+      loadedModel.position.sub(center);
+      view.model = loadedModel;
+      updateOrientationAircraftPose();
+    },
+    undefined,
+    () => view.render(),
+  );
+  view.resize();
+}
+
 function profilePwmOutputs() {
   const form = document.querySelector('#pwm-form');
   const limits = pwmOutputLimits();
@@ -1547,11 +1988,12 @@ function profileFlightConfig() {
       },
       ratePid: flightConfigValue('fc_rate_pid', []),
       anglePid: flightConfigValue('fc_angle_pid', []),
+      angleRateLimitsDps: flightConfigValue('fc_angle_rate_limits_dps', [100, 100]),
       dtermLpfHz: flightConfigValue('fc_dterm_lpf_hz', 20),
       gyroLpfHz: flightConfigValue('fc_gyro_lpf_hz', 30),
       mixer: flightConfigValue('fc_mixer', []),
       mixerServos: flightConfigValue('fc_mixer_servos', []),
-      orientation: orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw),
+      orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4),
     };
   }
 
@@ -1576,11 +2018,15 @@ function profileFlightConfig() {
     },
     ratePid: readNumGrid(form, 'fc_rate_pid', 3, 4),
     anglePid: readNumGrid(form, 'fc_angle_pid', 3, 4),
+    angleRateLimitsDps: [
+      intOrDefault(form.fc_angle_rate_limit_roll_dps.value, 100),
+      intOrDefault(form.fc_angle_rate_limit_pitch_dps.value, 100),
+    ],
     dtermLpfHz: intOrDefault(form.fc_dterm_lpf_hz.value, 20),
     gyroLpfHz: intOrDefault(form.fc_gyro_lpf_hz.value, 30),
     mixer: readNumGrid(form, 'fc_mixer', motorCount(), 4),
     mixerServos: readMixerServos(form, motorCount()),
-    orientation: orientationMatrixFromInstallEuler(state.eulerRoll, state.eulerPitch, state.eulerYaw),
+    orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4),
   };
 }
 
@@ -1648,8 +2094,10 @@ async function saveBlob(blob, fileName, filters = []) {
   const link = document.createElement('a');
   link.href = url;
   link.download = fileName;
+  document.body.appendChild(link);
   link.click();
-  URL.revokeObjectURL(url);
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   return fileName;
 }
 
@@ -1790,6 +2238,14 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
     if (gyroLpfHz > 0 && gyroLpfHz < 5) {
       throw new Error(t('error.invalidGyroLpf'));
     }
+    const angleRateLimitsDps = requireProfileArray(
+      profile.flight.angleRateLimitsDps ?? [100, 100],
+      'ANGLE rate limits',
+      2,
+      1,
+      1000,
+      true,
+    );
     const orientation = validateOrientationMatrix(
       requireProfileArray(profile.flight.orientation, 'orientation', 9, -1.1, 1.1),
     );
@@ -1800,6 +2256,7 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
       fc_arm_range: validateProfileRange(arm.range, 'ARM range'),
       fc_rate_pid: requireProfileArray(profile.flight.ratePid, 'Rate PID', 12, -327.68, 327.67),
       fc_angle_pid: requireProfileArray(profile.flight.anglePid, 'Angle PID', 12, -327.68, 327.67),
+      fc_angle_rate_limits_dps: angleRateLimitsDps,
       fc_dterm_lpf_hz: dtermLpfHz,
       fc_gyro_lpf_hz: gyroLpfHz,
       fc_mixer: mixer.map(Number),
@@ -1818,9 +2275,7 @@ function applyImportedProfile(profile) {
   state.profileCompatibility = structuredClone(profile.compatibility || {});
   state.profileImportError = '';
   state.extraMixerRows = 0;
-  if (draft.flight) {
-    [state.eulerRoll, state.eulerPitch, state.eulerYaw] = installEulerFromOrientationMatrix(draft.flight.fc_orientation);
-  }
+  if (draft.flight) state.orientationMatrix = orientationMatrixOrIdentity(draft.flight.fc_orientation);
   state.message = {type: 'ok', text: warnings.length
     ? `${t('message.profileImported')} ${warnings.join(' ')}`
     : t('message.profileImported')};
@@ -1845,7 +2300,7 @@ function discardProfileDraft() {
   state.profileImportError = '';
   state.extraMixerRows = 0;
   const orientation = configValue('fc_orientation', []);
-  [state.eulerRoll, state.eulerPitch, state.eulerYaw] = installEulerFromOrientationMatrix(orientation);
+  state.orientationMatrix = orientationMatrixOrIdentity(orientation);
   setMessage('ok', t('message.profileDiscarded'));
 }
 
@@ -2016,6 +2471,61 @@ function updateCommunityCatalogResults() {
 async function sha256Hex(text) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+function md5Hex(input) {
+  return Array.from(md5(input), (value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+function validateUnifiedEsp32Firmware(bytes) {
+  if (bytes.length < 24 || bytes[0] !== 0xe9) {
+    throw new Error(t('update.invalidHeader'));
+  }
+  const segmentCount = bytes[1];
+  if (segmentCount < 1 || segmentCount > 16) {
+    throw new Error(t('update.invalidSegments'));
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let position = 24;
+  for (let segment = 0; segment < segmentCount; ++segment) {
+    if (position + 8 > bytes.length) throw new Error(t('update.truncatedImage'));
+    const segmentSize = view.getUint32(position + 4, true);
+    position += 8 + segmentSize;
+    if (!Number.isSafeInteger(position) || position > bytes.length) {
+      throw new Error(t('update.truncatedImage'));
+    }
+  }
+
+  const firmwareEnd = ((position + 16) & ~15) + 32;
+  const productSize = 128;
+  const hardwareOffset = productSize + 16 + 512;
+  const hardwareSize = 2048;
+  if (firmwareEnd + hardwareOffset + hardwareSize > bytes.length) {
+    throw new Error(t('update.missingHardware'));
+  }
+
+  const decodeField = (start, length) => {
+    const field = bytes.subarray(start, start + length);
+    const terminator = field.indexOf(0);
+    return new TextDecoder().decode(terminator >= 0 ? field.subarray(0, terminator) : field).trim();
+  };
+  const product = decodeField(firmwareEnd, productSize);
+  if (!product) {
+    throw new Error(t('update.missingProduct'));
+  }
+  // Bare Unified images are intentionally supported by the firmware. They can
+  // be flashed first and assigned a hardware target from the WebUI afterwards.
+  if (['Unified', 'Unified RX', 'Unified TX'].includes(product)) return;
+
+  try {
+    const hardware = JSON.parse(decodeField(firmwareEnd + hardwareOffset, hardwareSize));
+    if (!hardware || Array.isArray(hardware) || typeof hardware !== 'object' || Object.keys(hardware).length === 0) {
+      throw new Error('empty');
+    }
+  } catch {
+    throw new Error(t('update.invalidHardware'));
+  }
 }
 
 async function fetchCommunityProfile(item) {
@@ -2256,8 +2766,8 @@ function renderCommunitySubmission() {
 function renderStatus() {
   const c = config();
   const h = hardware();
-  return `
-    <div class="grid">
+  return `<div class="debug-page">
+    <div class="grid status-summary-grid">
       <section class="panel">
         <h2>${t('status.device')}</h2>
         <div class="metric"><span>${t('status.target')}</span><strong>${escapeHtml(state.target?.target || c.target || t('value.unknown'))}</strong></div>
@@ -2306,7 +2816,7 @@ function renderRuntime() {
         <div class="row"><label for="rcvr-uart-baud">${t('runtime.uartBaud')}</label><input id="rcvr-uart-baud" name="rcvr-uart-baud" value="${escapeHtml(optionValue('rcvr-uart-baud', runtimeDefaults['rcvr-uart-baud']))}" inputmode="numeric"></div>
         <div class="check"><input id="lock-on-first-connection" name="lock-on-first-connection" type="checkbox" ${checked(optionValue('lock-on-first-connection', runtimeDefaults['lock-on-first-connection']))}><label for="lock-on-first-connection">${t('runtime.lockOnFirst')}</label></div>
         <div class="check"><input id="is-airport" name="is-airport" type="checkbox" ${checked(optionValue('is-airport', runtimeDefaults['is-airport']))}><label for="is-airport">${t('runtime.airport')}</label></div>
-        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot">${t('action.reboot')}</button></div>
+        <div class="actions"><button class="primary" ${state.busy ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot" ${state.busy ? 'disabled' : ''}>${t('action.reboot')}</button></div>
       </form>
     </section>`;
 }
@@ -2489,9 +2999,14 @@ function changeMixerRowCount(delta) {
   if (removeButton) removeButton.disabled = state.busy || state.extraMixerRows <= 0;
 }
 
-function rad(deg) { return deg * Math.PI / 180; }
 function deg(rad) { return rad * 180 / Math.PI; }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+
+function orientationMatrixOrIdentity(matrix) {
+  if (!Array.isArray(matrix) || matrix.length < 9) return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  const values = matrix.slice(0, 9).map(Number);
+  return values.every(Number.isFinite) ? values : [1, 0, 0, 0, 1, 0, 0, 0, 1];
+}
 
 function eulerFromMatrix(m) {
   // Decompose 3x3 rotation matrix (ZYX convention) into [roll, pitch, yaw] degrees.
@@ -2511,19 +3026,7 @@ function eulerFromMatrix(m) {
     roll = 0;
     yaw = Math.atan2(-m01, m11);
   }
-  return [Math.round(deg(roll)), Math.round(deg(pitch)), Math.round(deg(yaw))];
-}
-
-function matrixFromEuler(roll, pitch, yaw) {
-  // Compute 3x3 rotation matrix (ZYX convention, flat row-major).
-  const cr = Math.cos(rad(roll)), sr = Math.sin(rad(roll));
-  const cp = Math.cos(rad(pitch)), sp = Math.sin(rad(pitch));
-  const cy = Math.cos(rad(yaw)), sy = Math.sin(rad(yaw));
-  return [
-    round4(cy * cp),              round4(cy * sp * sr - sy * cr), round4(cy * sp * cr + sy * sr),
-    round4(sy * cp),              round4(sy * sp * sr + cy * cr), round4(sy * sp * cr - cy * sr),
-    round4(-sp),                  round4(cp * sr),                round4(cp * cr),
-  ];
+  return [roll, pitch, yaw].map((value) => Math.round(deg(value) * 10) / 10);
 }
 
 function transposeMatrix3(m) {
@@ -2535,15 +3038,6 @@ function transposeMatrix3(m) {
   ];
 }
 
-function orientationMatrixFromInstallEuler(roll, pitch, yaw) {
-  // UI angles describe the physical board install attitude in the body frame.
-  // Firmware fc_orientation has the opposite direction: raw IMU frame -> internal
-  // body frame (+X forward, +Y left, +Z up). For pure rotation matrices the
-  // inverse is the transpose, so the saved matrix is the inverse of the visible
-  // install angle. Example: a physical yaw=90 install may save as yaw=-90.
-  return transposeMatrix3(matrixFromEuler(roll, pitch, yaw)).map(round4);
-}
-
 function installEulerFromOrientationMatrix(m) {
   // Hardware JSON stores the firmware raw->internal matrix. Show users the
   // inverse because the UI labels are physical install roll/pitch/yaw.
@@ -2552,10 +3046,6 @@ function installEulerFromOrientationMatrix(m) {
 
 function round4(value) {
   return Math.round(value * 10000) / 10000;
-}
-
-function formatMatrixRow(row) {
-  return row.map((v) => String(v).padStart(8)).join(' ');
 }
 
 function renderActivationRange(id, label, description, range, tone, disabled = false, channel = null, auxOptions = null) {
@@ -2587,35 +3077,127 @@ function renderActivationRange(id, label, description, range, tone, disabled = f
     </div>`;
 }
 
-function boardPreviewTransform(roll, pitch, yaw) {
-  // The board graphic draws FlightControl +X forward as the on-screen FW arrow.
-  // Map preview rotations onto that frame: roll about forward, pitch about left,
-  // and yaw inverted for CSS' top-down screen rotation direction.
-  return `rotateZ(${-yaw}deg) rotateY(${roll}deg) rotateX(${pitch}deg)`;
+function renderImuCalibration() {
+  const calibration = state.imuCalibration;
+  const completed = calibration.accelFaces.filter(Boolean).length;
+  const gyroBias = calibration.gyroBias || configValue('fc_gyro_bias', [0, 0, 0]);
+  const accelBias = calibration.accelBias || configValue('fc_accel_bias', [0, 0, 0]);
+  const accelScale = calibration.accelScale || configValue('fc_accel_scale', [1, 1, 1]);
+  const busy = Boolean(calibration.busy || state.orientationCal.busy);
+  const faceButtons = ACCEL_CAL_FACES.map((face, index) => {
+    const done = Boolean(calibration.accelFaces[index]);
+    const classes = ['imu-face-button', done ? 'is-done' : 'is-pending'].join(' ');
+    return `<div class="${classes}" aria-label="${escapeHtml(t(face.label))}: ${escapeHtml(t(done ? 'imuCalibration.faceDone' : 'imuCalibration.facePending'))}">
+      <span>${done ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 12 4 4 8-9"/></svg>' : index + 1}</span><strong>${escapeHtml(t(face.label))}</strong><small>${escapeHtml(t(done ? 'imuCalibration.faceDone' : 'imuCalibration.facePending'))}</small>
+    </div>`;
+  }).join('');
+  return `
+    <div class="row">
+      <label>${t('imuCalibration.heading')}</label>
+      <div class="notice">${t('imuCalibration.safety')}</div>
+      <div class="imu-calibration-grid">
+        <section class="imu-cal-card ${calibration.busy === 'accel-detect' ? 'is-calibrating' : ''}">
+          <div class="imu-card-heading">
+            <div><h3>${t('imuCalibration.accelTitle')}</h3><p>${t('imuCalibration.accelDescription')}</p></div>
+            <span class="cal-progress">${t('imuCalibration.progress', {done: completed})}</span>
+          </div>
+          <div class="imu-step-hint">${completed < ACCEL_CAL_FACES.length
+            ? t('imuCalibration.autoFaceHint')
+            : t('imuCalibration.accelReady')}</div>
+          <div class="imu-face-actions">${faceButtons}</div>
+          <div class="actions"><button class="primary" type="button" data-action="accel-next" ${state.busy || busy || completed >= ACCEL_CAL_FACES.length ? 'disabled' : ''}>${t('imuCalibration.nextStep')}</button><button class="secondary" type="button" data-action="accel-reset" ${state.busy || busy ? 'disabled' : ''}>${t('imuCalibration.resetAccel')}</button></div>
+          ${calibration.busy === 'accel-detect' ? `<div class="calibrating-overlay" role="status" aria-live="polite"><span aria-hidden="true"></span>${t('imuCalibration.detectingFace')}</div>` : ''}
+        </section>
+        <section class="imu-cal-card ${calibration.busy === 'gyro' ? 'is-calibrating' : ''}">
+          <div class="imu-card-heading">
+            <div><h3>${t('imuCalibration.gyroTitle')}</h3><p>${t('imuCalibration.gyroDescription')}</p></div>
+            ${calibration.gyroBias ? `<span class="cal-ready">${t('imuCalibration.ready')}</span>` : ''}
+          </div>
+          <div class="gyro-still-visual"><div class="gyro-icon" aria-hidden="true">⊕</div><strong>${t('imuCalibration.keepStill')}</strong><small>${t('imuCalibration.gyroDuration')}</small></div>
+          <div class="actions"><button class="secondary" type="button" data-action="gyro-calibrate" ${state.busy || busy ? 'disabled' : ''}>${t('imuCalibration.startGyro')}</button></div>
+          ${calibration.busy === 'gyro' ? `<div class="calibrating-overlay" role="status" aria-live="polite"><span aria-hidden="true"></span>${t('imuCalibration.sampling')}</div>` : ''}
+        </section>
+      </div>
+      <div class="imu-cal-results">
+        <div><strong>${t('imuCalibration.gyroBias')}</strong>${renderNumGrid('fc_gyro_bias', [t('imuCalibration.offset')], ['X', 'Y', 'Z'], gyroBias, {rowHeader: t('flight.axis')})}</div>
+        <div><strong>${t('imuCalibration.accelBias')}</strong>${renderNumGrid('fc_accel_bias', [t('imuCalibration.offset')], ['X', 'Y', 'Z'], accelBias, {rowHeader: t('flight.axis')})}</div>
+        <div><strong>${t('imuCalibration.accelScale')}</strong>${renderNumGrid('fc_accel_scale', [t('imuCalibration.scale')], ['X', 'Y', 'Z'], accelScale, {rowHeader: t('flight.axis')})}</div>
+      </div>
+      <div class="helper">${t('imuCalibration.saveHelp')}</div>
+    </div>`;
+}
+
+function renderOrientationCalibration(installEuler) {
+  const calibration = state.orientationCal;
+  const completed = calibration.samples.filter(Boolean).length;
+  const nextIndex = calibration.samples.findIndex((sample) => !sample);
+  const faceStatus = ORIENTATION_CAL_STEPS.map((step, orderIndex) => {
+    const done = Boolean(calibration.samples[orderIndex]);
+    const current = orderIndex === nextIndex;
+    const classes = ['imu-face-button', done ? 'is-done' : 'is-pending', current ? 'is-current' : ''].filter(Boolean).join(' ');
+    const statusKey = done ? 'imuCalibration.faceDone' : (current ? 'orient.faceCurrent' : 'imuCalibration.facePending');
+    return `<div class="${classes}" aria-label="${escapeHtml(t(step.label))}: ${escapeHtml(t(statusKey))}">
+      <span>${done ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 12 4 4 8-9"/></svg>' : orderIndex + 1}</span><strong>${escapeHtml(t(step.label))}</strong><small>${escapeHtml(t(statusKey))}</small>
+    </div>`;
+  }).join('');
+  const hint = nextIndex >= 0
+    ? t(nextIndex === 0 ? 'orient.topUpInstruction' : 'orient.noseUpInstruction')
+    : t('orient.ready', {
+      roll: Number(calibration.levelCorrectionDeg?.[0] || 0).toFixed(1),
+      pitch: Number(calibration.levelCorrectionDeg?.[1] || 0).toFixed(1),
+    });
+  const poseStepIndex = nextIndex >= 0 ? nextIndex : ORIENTATION_CAL_STEPS.length - 1;
+  const poseStep = ORIENTATION_CAL_STEPS[poseStepIndex];
+  return `
+    <div class="orientation-editor">
+      <div class="orientation-calibration-layout">
+        <section class="imu-cal-card orientation-cal-card ${calibration.busy ? 'is-calibrating' : ''}">
+          <div class="imu-card-heading">
+            <div><h3>${t('orient.heading')}</h3><p>${t('orient.description')}</p></div>
+            <span class="cal-progress">${t('orient.progress', {done: completed})}</span>
+          </div>
+          <div class="notice">${t('orient.safety')}</div>
+          <div class="imu-step-hint">${escapeHtml(hint)}</div>
+          <div class="imu-face-actions">${faceStatus}</div>
+          <div class="actions"><button class="primary" type="button" data-action="orientation-next" ${state.busy || calibration.busy || state.imuCalibration.busy || nextIndex < 0 ? 'disabled' : ''}>${t('orient.capture')}</button><button class="secondary" type="button" data-action="orientation-reset" ${state.busy || calibration.busy || state.imuCalibration.busy ? 'disabled' : ''}>${t('orient.reset')}</button></div>
+          ${calibration.busy ? `<div class="calibrating-overlay" role="status" aria-live="polite"><span aria-hidden="true"></span>${t('imuCalibration.sampling')}</div>` : ''}
+        </section>
+        <aside class="orientation-pose-card" aria-label="${escapeHtml(t('orient.poseTitle'))}">
+          <div class="orientation-pose-heading"><span>${t('orient.poseTitle')}</span><strong>${escapeHtml(t(poseStep.label))}</strong></div>
+          <div id="orientation-aircraft-wrapper" class="orientation-aircraft-wrapper">
+            <canvas id="orientation-aircraft-canvas" aria-label="${escapeHtml(t('orient.poseCanvasLabel', {face: t(poseStep.label)}))}"></canvas>
+          </div>
+          <div class="helper">${t(poseStepIndex === 0 ? 'orient.topUpPoseHelp' : 'orient.noseUpPoseHelp')}</div>
+        </aside>
+      </div>
+      <section class="orientation-results-card">
+        <div class="orientation-results-heading"><strong>${t('orient.eulerResult')}</strong><span>${t('orient.resultReadOnly')}</span></div>
+        <div class="imu-cal-results orientation-results">
+          <div>${renderNumGrid('orientation-euler-result', [t('orient.installAngle')], [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], installEuler, {rowHeader: t('flight.axis'), disabled: true})}</div>
+        </div>
+        <div class="helper">${t('orient.saveHelp')}</div>
+      </section>
+    </div>`;
 }
 
 function renderFlight() {
   const motors = motorCount();
   const ratePid = flightConfigValue('fc_rate_pid', []);
   const anglePid = flightConfigValue('fc_angle_pid', []);
+  const angleRateLimits = flightConfigValue('fc_angle_rate_limits_dps', [100, 100]);
   const dtermLpfHz = flightConfigValue('fc_dterm_lpf_hz', 20);
   const gyroLpfHz = flightConfigValue('fc_gyro_lpf_hz', 30);
+  const angleEnabled = Boolean(flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 1700]}).angle);
   const mixer = flightConfigValue('fc_mixer', []);
   const mixerServos = flightConfigValue('fc_mixer_servos', []);
   const modeConditions = flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 1700]});
+  const wifiConditions = flightConfigValue('fc_wifi_conditions', {coexist: [7, 1700, 2100]});
   const armEnabled = flightConfigValue('fc_arm_enabled', false);
   const armChannel = flightConfigValue('fc_arm_channel', 5);
   const armRange = flightConfigValue('fc_arm_range', [1700, 2100]);
   const auxOptions = (selectedChannel) => pwmInputLabels.slice(4).map((label, index) => `<option value="${index + 5}" ${selected(selectedChannel, index + 5)}>${label}</option>`).join('');
-  const roll = state.eulerRoll ?? 0;
-  const pitch = state.eulerPitch ?? 0;
-  const yaw = state.eulerYaw ?? 0;
-  const matrix = orientationMatrixFromInstallEuler(roll, pitch, yaw);
-  const matrixText = [
-    formatMatrixRow(matrix.slice(0, 3)),
-    formatMatrixRow(matrix.slice(3, 6)),
-    formatMatrixRow(matrix.slice(6, 9)),
-  ].join('\n');
+  const matrix = orientationMatrixOrIdentity(state.orientationMatrix);
+  const installEuler = installEulerFromOrientationMatrix(matrix);
   return `
     <section class="panel">
       <h2>${t('flight.heading')}</h2>
@@ -2637,27 +3219,53 @@ function renderFlight() {
           </div>
           ${renderActivationRange('arm', 'ARM', t('flight.armRangeDescription'), armRange, '#d97706', !armEnabled)}
         </div>
+        <div class="mode-config">
+          <div class="mode-config-header">
+            <div><h3>${t('flight.wifiModeRanges')}</h3><div class="helper">${t('flight.wifiRangeHelp')}</div></div>
+          </div>
+          <div class="mode-range-list">
+            ${renderActivationRange('wifi_coexist', t('flight.wifiCoexist'), t('flight.wifiCoexistDescription'), wifiConditions.coexist?.slice(1) ?? [1700, 2100], '#0891b2', !wifiConditions.coexist, wifiConditions.coexist?.[0] ?? 7, auxOptions)}
+          </div>
+        </div>
         <div class="notice">${t('notice.rateLoop')}</div>
-        <div class="row">
-          <label for="fc_gyro_lpf_hz">${t('flight.gyroLpf')}</label>
-          <input id="fc_gyro_lpf_hz" name="fc_gyro_lpf_hz" type="number" min="0" max="100" step="1" value="${escapeHtml(gyroLpfHz)}">
-          <div class="helper">${t('flight.gyroLpfHelp')}</div>
+        <div class="filter-config">
+          <div class="filter-config-header"><div><h3>${t('flight.filterSettings')}</h3><div class="helper">${t('flight.filterSettingsHelp')}</div></div></div>
+          <div class="filter-config-body">
+            <div class="filter-lpf-grid">
+              <div class="row">
+                <label for="fc_gyro_lpf_hz">${t('flight.gyroLpf')}</label>
+                <input id="fc_gyro_lpf_hz" name="fc_gyro_lpf_hz" type="number" min="0" max="100" step="1" value="${escapeHtml(gyroLpfHz)}">
+                <div class="helper">${t('flight.gyroLpfHelp')}</div>
+              </div>
+              <div class="row">
+                <label for="fc_dterm_lpf_hz">${t('flight.dtermLpf')}</label>
+                <input id="fc_dterm_lpf_hz" name="fc_dterm_lpf_hz" type="number" min="0" max="100" step="1" value="${escapeHtml(dtermLpfHz)}">
+                <div class="helper">${t('flight.dtermLpfHelp')}</div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="row">
-          <label for="fc_dterm_lpf_hz">${t('flight.dtermLpf')}</label>
-          <input id="fc_dterm_lpf_hz" name="fc_dterm_lpf_hz" type="number" min="0" max="100" step="1" value="${escapeHtml(dtermLpfHz)}">
-          <div class="helper">${t('flight.dtermLpfHelp')}</div>
-        </div>
-        <div class="row">
-          <label>${t('flight.ratePid')}</label>
-          ${renderNumGrid('fc_rate_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], ratePid, {rowHeader: t('flight.axis')})}
-        </div>
-        <div class="row" id="angle-pid-row">
-          <label>${t('flight.anglePid')}</label>
-          ${renderNumGrid('fc_angle_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], anglePid, {rowHeader: t('flight.axis')})}
-        </div>
-        <div class="row">
-          <label>${t('flight.mixer')}</label>
+        <section class="flight-setting-card">
+          <div class="flight-setting-card-header"><h3>${t('flight.ratePid')}</h3><p>${t('flight.ratePidHelp')}</p></div>
+          <div class="flight-setting-card-body">${renderNumGrid('fc_rate_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], ratePid, {rowHeader: t('flight.axis')})}</div>
+        </section>
+        <section class="flight-setting-card angle-rate-limit-card" id="angle-rate-limit-card" data-angle-setting style="display:${angleEnabled ? 'block' : 'none'}">
+          <div class="flight-setting-card-header"><h3>${t('flight.angleRateLimits')}</h3><p>${t('flight.angleRateLimitsHelp')}</p></div>
+          <div class="flight-setting-card-body angle-rate-limit-grid">
+            ${[['roll', t('flight.roll'), angleRateLimits[0] ?? 100], ['pitch', t('flight.pitch'), angleRateLimits[1] ?? 100]].map(([axis, label, value]) => `
+              <label class="angle-rate-limit-field" for="fc-angle-rate-limit-${axis}">
+                <span><strong>${label}</strong><small>${t('flight.angleRateLimit')}</small></span>
+                <span class="number-with-unit"><input id="fc-angle-rate-limit-${axis}" name="fc_angle_rate_limit_${axis}_dps" type="number" min="1" max="1000" step="1" value="${escapeHtml(value)}"><small>°/s</small></span>
+              </label>`).join('')}
+          </div>
+        </section>
+        <section class="flight-setting-card" id="angle-pid-row" data-angle-setting style="display:${angleEnabled ? 'block' : 'none'}">
+          <div class="flight-setting-card-header"><h3>${t('flight.anglePid')}</h3><p>${t('flight.anglePidHelp')}</p></div>
+          <div class="flight-setting-card-body">${renderNumGrid('fc_angle_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], anglePid, {rowHeader: t('flight.axis')})}</div>
+        </section>
+        <section class="flight-setting-card">
+          <div class="flight-setting-card-header"><h3>${t('flight.mixer')}</h3><p>${t('flight.mixerHelp')}</p></div>
+          <div class="flight-setting-card-body">
           ${renderNumGrid('fc_mixer', Array.from({length: motors}, (_, i) => `${t('flight.output')} ${i + 1}`), [t('flight.throttle'), t('flight.roll'), t('flight.pitch'), t('flight.yaw')], mixer, {
             rowHeader: t('flight.output'),
             flagName: 'fc-mixer-servo',
@@ -2670,61 +3278,22 @@ function renderFlight() {
             <button class="secondary" type="button" data-action="add-motor" ${state.busy ? 'disabled' : ''}>${t('action.addOutput')}</button>
             <button class="secondary" type="button" data-action="remove-motor" ${state.busy || state.extraMixerRows <= 0 ? 'disabled' : ''}>${t('action.removeOutput')}</button>
           </div>
-        </div>
+          </div>
+        </section>
         <div class="row">
           <label>${t('flight.boardOrientation')}</label>
-          <div class="orientation-editor">
-            <div class="euler-controls">
-              <div class="euler-field">
-                <label for="euler-roll">${t('flight.roll')} <span class="axis-tag">X</span></label>
-                <div class="euler-input-row">
-                  <input type="range" id="euler-roll-slider" data-euler="roll" class="euler-slider" min="-180" max="180" value="${roll}">
-                  <input type="number" id="euler-roll" data-euler="roll" class="euler-number" value="${roll}" step="1" min="-180" max="180">
-                </div>
-              </div>
-              <div class="euler-field">
-                <label for="euler-pitch">${t('flight.pitch')} <span class="axis-tag">Y</span></label>
-                <div class="euler-input-row">
-                  <input type="range" id="euler-pitch-slider" data-euler="pitch" class="euler-slider" min="-180" max="180" value="${pitch}">
-                  <input type="number" id="euler-pitch" data-euler="pitch" class="euler-number" value="${pitch}" step="1" min="-180" max="180">
-                </div>
-              </div>
-              <div class="euler-field">
-                <label for="euler-yaw">${t('flight.yaw')} <span class="axis-tag">Z</span></label>
-                <div class="euler-input-row">
-                  <input type="range" id="euler-yaw-slider" data-euler="yaw" class="euler-slider" min="-180" max="180" value="${yaw}">
-                  <input type="number" id="euler-yaw" data-euler="yaw" class="euler-number" value="${yaw}" step="1" min="-180" max="180">
-                </div>
-              </div>
-            </div>
-            <div class="preview-scene">
-              <div class="preview-scene-inner">
-                <div class="preview-board" id="board-preview" style="transform:${boardPreviewTransform(roll, pitch, yaw)}">
-                  <div class="board-top">
-                    <div class="board-chip">▲</div>
-                    <div class="board-label">${t('flight.boardLabel')}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="matrix-display">${escapeHtml(matrixText)}</div>
-            <div class="helper">${escapeHtml(orientationCalText())}</div>
-            <div class="actions">
-              <button class="secondary" type="button" data-action="quick-orientation" ${state.busy ? 'disabled' : ''}>${escapeHtml(orientationCalButtonText())}</button>
-            </div>
-          </div>
+          ${renderOrientationCalibration(installEuler)}
         </div>
-        <div class="actions"><button class="primary" ${state.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot">${t('action.reboot')}</button></div>
+        <div id="angle-imu-calibration" style="display:${angleEnabled ? 'block' : 'none'}">${renderImuCalibration()}</div>
+        <div class="actions"><button class="primary" ${state.busy || state.imuCalibration.busy || state.orientationCal.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot" ${state.busy || state.imuCalibration.busy || state.orientationCal.busy ? 'disabled' : ''}>${t('action.reboot')}</button></div>
       </form>
     </section>`;
 }
 
 function renderDebug() {
   const sample = state.debugSample;
-  const attitudeErrorRoll = sample ? sample.roll_deg - sample.accel_roll_deg : NaN;
-  const attitudeErrorPitch = sample ? sample.pitch_deg - sample.accel_pitch_deg : NaN;
   return `
-    <div class="grid">
+    <div class="grid debug-summary-grid">
       <section class="panel">
         <h2>${t('debug.headingPolling')}</h2>
         <div class="row">
@@ -2746,9 +3315,6 @@ function renderDebug() {
         <div class="metric"><span>${t('flight.roll')}</span><strong id="debug-roll">${formatDebugValue(sample?.roll_deg, 2, ' deg')}</strong></div>
         <div class="metric"><span>${t('flight.pitch')}</span><strong id="debug-pitch">${formatDebugValue(sample?.pitch_deg, 2, ' deg')}</strong></div>
         <div class="metric"><span>${t('flight.yaw')}</span><strong id="debug-yaw">${formatDebugValue(sample?.yaw_deg, 2, ' deg')}</strong></div>
-        <div class="metric"><span>${t('debug.accelRollRef')}</span><strong id="debug-accel-roll">${formatDebugValue(sample?.accel_roll_deg, 2, ' deg')}</strong></div>
-        <div class="metric"><span>${t('debug.accelPitchRef')}</span><strong id="debug-accel-pitch">${formatDebugValue(sample?.accel_pitch_deg, 2, ' deg')}</strong></div>
-        <div class="metric"><span>${t('debug.rollPitchError')}</span><strong id="debug-error-angle">${formatDebugValue(attitudeErrorRoll, 2, ' deg')} / ${formatDebugValue(attitudeErrorPitch, 2, ' deg')}</strong></div>
       </section>
       <section class="panel debug-aircraft-panel">
         <h2>${t('debug.headingAircraft')}</h2>
@@ -2756,7 +3322,303 @@ function renderDebug() {
           <canvas id="debug-aircraft-canvas" aria-label="${t('debug.canvasLabel')}"></canvas>
         </div>
       </section>
-    </div>`;
+    </div>
+    ${renderPidLog()}
+  </div>`;
+}
+
+const pidRateSeries = [
+  ['rateRollTarget', 'Roll target', '#2563eb'], ['rateRollState', 'Roll state', '#60a5fa'],
+  ['ratePitchTarget', 'Pitch target', '#dc2626'], ['ratePitchState', 'Pitch state', '#f87171'],
+  ['rateYawTarget', 'Yaw target', '#16a34a'], ['rateYawState', 'Yaw state', '#4ade80'],
+];
+const pidAngleSeries = [
+  ['angleRollTarget', 'Roll target', '#7c3aed'], ['angleRollState', 'Roll state', '#a78bfa'],
+  ['anglePitchTarget', 'Pitch target', '#ea580c'], ['anglePitchState', 'Pitch state', '#fb923c'],
+];
+
+function pidChartDefinitions() {
+  if (state.pidLogMode === 'angle') {
+    return [
+      {key: 'angle', title: t('pidlog.angleChart'), unit: 'deg', series: pidAngleSeries},
+    ];
+  }
+  return [
+    {key: 'rate', title: t('pidlog.rateChart'), unit: 'deg/s', series: pidRateSeries},
+  ];
+}
+
+function pidSamplesForDisplay() {
+  // MSP polling is explicitly started by the user. Keep every returned sample
+  // so waveform playback no longer depends on the CH6 flight-mode position.
+  return state.pidLogSamples;
+}
+
+function pidChartView(key) {
+  if (!state.pidChartViews[key]) state.pidChartViews[key] = {endUs: null, followLatest: true};
+  return state.pidChartViews[key];
+}
+
+function renderPidLegend(series) {
+  return `<div class="pid-series">${series.map(([key, label, color]) => `<label><input type="checkbox" data-pid-series="${key}" ${state.pidLogVisible[key] === false ? '' : 'checked'}><span style="--series-color:${color}"></span>${label}</label>`).join('')}</div>`;
+}
+
+function renderPidLog() {
+  return `<div class="pid-log-layout">
+    <section class="panel">
+      <div class="panel-heading"><div><h2>${t('pidlog.heading')}</h2><div class="helper">${t('pidlog.description')}</div></div></div>
+      <div class="actions"><button class="primary" type="button" data-action="pidlive-${state.pidLiveReceiving ? 'stop' : 'start'}" ${state.pidLiveStarting ? 'disabled' : ''}>${state.pidLiveStarting ? t('pidlog.connecting') : state.pidLiveReceiving ? t('pidlog.stop') : t('pidlog.start')}</button><button class="secondary" type="button" data-action="pidlive-clear">${t('pidlog.clear')}</button><button class="secondary" type="button" data-action="pidlive-save" ${state.pidLogSamples.length ? '' : 'disabled'}>${t('pidlog.save')}</button></div>
+      ${state.pidLogError ? `<div class="message error">${escapeHtml(state.pidLogError)}</div>` : ''}
+      <div class="metrics"><div class="metric"><span>${t('pidlog.pollRate')}</span><strong id="pid-live-rate">${state.pidLiveRateHz.toFixed(1)} Hz</strong></div><div class="metric"><span>${t('pidlog.points')}</span><strong id="pid-live-packets">${state.pidLivePackets.toLocaleString()}</strong></div><div class="metric"><span>${t('pidlog.duplicates')}</span><strong id="pid-live-duplicates">${state.pidLiveDuplicates.toLocaleString()}</strong></div></div>
+      <div class="pid-time-controls">
+        <label>${t('pidlog.window')} <select id="pid-live-window">${![0, 5, 10, 30].includes(state.pidLiveWindowSeconds) ? `<option value="${state.pidLiveWindowSeconds}" selected>${state.pidLiveWindowSeconds.toFixed(2)} s</option>` : ''}<option value="5" ${state.pidLiveWindowSeconds === 5 ? 'selected' : ''}>5 s</option><option value="10" ${state.pidLiveWindowSeconds === 10 ? 'selected' : ''}>10 s</option><option value="30" ${state.pidLiveWindowSeconds === 30 ? 'selected' : ''}>30 s</option><option value="0" ${state.pidLiveWindowSeconds === 0 ? 'selected' : ''}>${t('pidlog.all')}</option></select></label>
+        <span id="pid-window-label">${state.pidLiveWindowSeconds ? `${state.pidLiveWindowSeconds.toFixed(2)} s` : t('pidlog.all')}</span>
+      </div>
+      <div class="helper">${t('pidlog.chartHelp')}</div>
+    </section>
+    <section class="panel pid-chart-panel">
+      <div class="panel-heading"><div><h2><span class="live-pulse" aria-hidden="true"></span>${t('pidlog.liveHeading')}</h2><div class="helper">${t('pidlog.liveHelp')}</div></div><span class="live-caption">LIVE DATA</span></div>
+      <div class="pid-mode-tabs"><button type="button" data-pid-mode="rate" class="${state.pidLogMode === 'rate' ? 'active' : ''}">${t('pidlog.rateTab')}</button><button type="button" data-pid-mode="angle" class="${state.pidLogMode === 'angle' ? 'active' : ''}">${t('pidlog.angleTab')}</button></div>
+      <div class="pid-chart-heading"><h3>${state.pidLogMode === 'angle' ? t('pidlog.angleLoop') : t('pidlog.rateLoop')}</h3>${renderPidLegend(state.pidLogMode === 'angle' ? pidAngleSeries : pidRateSeries)}</div>
+      <div class="pid-axis-charts">${pidChartDefinitions().map((chart) => `<div class="pid-chart-block" data-pid-chart-block="${chart.key}"><div class="pid-axis-title"><h3>${chart.title}</h3><span>${chart.unit}</span></div><canvas data-pid-chart="${chart.key}"></canvas><div class="pid-chart-timeline"><span>${t('pidlog.history')}</span><input data-pid-timeline="${chart.key}" type="range" min="0" max="1000" step="1" value="1000"><button class="secondary" type="button" data-pid-latest="${chart.key}">${t('pidlog.latest')}</button></div></div>`).join('')}</div>
+    </section>
+  </div>`;
+}
+
+function drawPidChart(canvas, samples, chart) {
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(320, canvas.clientWidth);
+  const height = Math.max(240, canvas.clientHeight);
+  canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
+  const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr);
+  const visible = chart.series.filter(([key]) => state.pidLogVisible[key] !== false);
+  ctx.fillStyle = '#f2eee6'; ctx.fillRect(0, 0, width, height);
+  if (samples.length < 2) {
+    ctx.fillStyle = '#625b53'; ctx.font = '13px sans-serif';
+    ctx.fillText(state.pidLogMode === 'angle' ? t('pidlog.waitingAngle') : t('pidlog.waitingRate'), 18, 30);
+    return;
+  }
+  if (!visible.length) return;
+  let minY = Infinity; let maxY = -Infinity;
+  for (const sample of samples) for (const [key] of visible) { minY = Math.min(minY, sample[key]); maxY = Math.max(maxY, sample[key]); }
+  if (minY === maxY) { minY -= 1; maxY += 1; }
+  const pad = Math.max(1, (maxY - minY) * 0.08); minY -= pad; maxY += pad;
+  const left = 54; const top = 15; const right = 12; const bottom = 30;
+  const t0 = samples[0].timeUs; const span = Math.max(1, samples[samples.length - 1].timeUs - t0);
+  ctx.strokeStyle = '#c5b7a3'; ctx.lineWidth = 1; ctx.strokeRect(left, top, width - left - right, height - top - bottom);
+  ctx.fillStyle = '#625b53'; ctx.font = '12px sans-serif'; ctx.fillText(maxY.toFixed(1), 4, top + 5); ctx.fillText(minY.toFixed(1), 4, height - bottom);
+  for (const [key, , color] of visible) {
+    ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 1.25;
+    samples.forEach((sample, index) => {
+      const x = left + ((sample.timeUs - t0) / span) * (width - left - right);
+      const y = top + ((maxY - sample[key]) / (maxY - minY)) * (height - top - bottom);
+      if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+  const hover = state.pidChartHover[chart.key];
+  if (hover && samples.length) {
+    const plotWidth = width - left - right;
+    const ratio = Math.max(0, Math.min(1, (hover.x - left) / Math.max(1, plotWidth)));
+    const targetUs = t0 + ratio * span;
+    let nearest = samples[0];
+    for (const sample of samples) {
+      if (Math.abs(sample.timeUs - targetUs) < Math.abs(nearest.timeUs - targetUs)) nearest = sample;
+    }
+    const pointX = left + ((nearest.timeUs - t0) / span) * plotWidth;
+    ctx.save();
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = '#8f806d'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pointX, top); ctx.lineTo(pointX, height - bottom); ctx.stroke(); ctx.setLineDash([]);
+    const lines = [`${t('pidlog.time')}  ${((nearest.timeUs - t0) / 1e6).toFixed(3)} s`, ...visible.map(([key, label]) => `${label}  ${Number(nearest[key]).toFixed(2)} ${chart.unit}`)];
+    ctx.font = '12px sans-serif';
+    const boxWidth = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 22;
+    const boxHeight = lines.length * 19 + 12;
+    const boxX = hover.x < width / 2 ? width - right - boxWidth - 8 : left + 8;
+    const boxY = hover.y < height / 2 ? height - bottom - boxHeight - 8 : top + 8;
+    ctx.fillStyle = 'rgba(69, 61, 52, 0.94)';
+    ctx.beginPath(); ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 7); ctx.fill();
+    lines.forEach((line, index) => { ctx.fillStyle = index ? visible[index - 1][2] : '#e2e8f0'; ctx.fillText(line, boxX + 11, boxY + 18 + index * 19); });
+    for (const [key, , color] of visible) {
+      const pointY = top + ((maxY - nearest[key]) / (maxY - minY)) * (height - top - bottom);
+      ctx.beginPath(); ctx.fillStyle = color; ctx.arc(pointX, pointY, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+function updatePidLiveView(redraw = true) {
+  const values = {
+    'pid-live-rate': `${state.pidLiveRateHz.toFixed(1)} Hz`,
+    'pid-live-packets': state.pidLivePackets.toLocaleString(),
+    'pid-live-duplicates': state.pidLiveDuplicates.toLocaleString(),
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const element = document.getElementById(id);
+    if (element) element.textContent = value;
+  });
+  const saveButton = document.querySelector('[data-action="pidlive-save"]');
+  if (saveButton) saveButton.disabled = state.pidLogSamples.length === 0;
+  if (redraw) drawPidCharts();
+}
+
+function drawPidCharts() {
+  const allModeSamples = pidSamplesForDisplay();
+  const label = document.querySelector('#pid-window-label');
+  if (label) label.textContent = state.pidLiveWindowSeconds ? `${state.pidLiveWindowSeconds.toFixed(2)} s` : t('pidlog.all');
+  for (const chart of pidChartDefinitions()) {
+    const view = pidChartView(chart.key);
+    let samples = allModeSamples;
+    let timelineValue = 1000;
+    if (state.pidLiveWindowSeconds && allModeSamples.length) {
+      const firstUs = allModeSamples[0].timeUs;
+      const latestUs = allModeSamples[allModeSamples.length - 1].timeUs;
+      const windowUs = state.pidLiveWindowSeconds * 1e6;
+      const earliestEndUs = Math.min(latestUs, firstUs + windowUs);
+      if (view.followLatest || view.endUs === null) view.endUs = latestUs;
+      view.endUs = Math.max(earliestEndUs, Math.min(latestUs, view.endUs));
+      samples = allModeSamples.filter((sample) => sample.timeUs >= view.endUs - windowUs && sample.timeUs <= view.endUs);
+      timelineValue = latestUs === earliestEndUs ? 1000 : Math.round((view.endUs - earliestEndUs) / (latestUs - earliestEndUs) * 1000);
+    }
+    const timeline = document.querySelector(`[data-pid-timeline="${chart.key}"]`);
+    if (timeline) { timeline.value = timelineValue; timeline.disabled = !state.pidLiveWindowSeconds || allModeSamples.length < 2; }
+    const latestButton = document.querySelector(`[data-pid-latest="${chart.key}"]`);
+    if (latestButton) latestButton.disabled = view.followLatest;
+    drawPidChart(document.querySelector(`[data-pid-chart="${chart.key}"]`), samples, chart);
+  }
+}
+
+function zoomPidTimeline(event) {
+  if (!state.pidLogSamples.length) return;
+  event.preventDefault();
+  const samples = pidSamplesForDisplay();
+  if (samples.length < 2) return;
+  const fullSeconds = Math.max(0.05, (samples[samples.length - 1].timeUs - samples[0].timeUs) / 1e6);
+  const currentSeconds = state.pidLiveWindowSeconds || fullSeconds;
+  const latestUs = samples[samples.length - 1].timeUs;
+  const oldWindowUs = currentSeconds * 1e6;
+  const key = event.currentTarget.dataset.pidChart;
+  const view = pidChartView(key);
+  const oldEndUs = view.followLatest || view.endUs === null ? latestUs : view.endUs;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const anchor = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
+  const anchorUs = oldEndUs - oldWindowUs + anchor * oldWindowUs;
+  state.pidLiveWindowSeconds = Math.max(0.05, Math.min(fullSeconds, currentSeconds * Math.exp(event.deltaY * 0.001)));
+  const newWindowUs = state.pidLiveWindowSeconds * 1e6;
+  const earliestEndUs = Math.min(latestUs, samples[0].timeUs + newWindowUs);
+  view.endUs = Math.max(earliestEndUs, Math.min(latestUs, anchorUs + (1 - anchor) * newWindowUs));
+  view.followLatest = Math.abs(view.endUs - latestUs) < 1;
+  drawPidCharts();
+}
+
+function seekPidTimeline(key, value) {
+  const samples = pidSamplesForDisplay();
+  if (!samples.length || !state.pidLiveWindowSeconds) return;
+  const firstUs = samples[0].timeUs;
+  const latestUs = samples[samples.length - 1].timeUs;
+  const earliestEndUs = Math.min(latestUs, firstUs + state.pidLiveWindowSeconds * 1e6);
+  const view = pidChartView(key);
+  view.endUs = earliestEndUs + (latestUs - earliestEndUs) * Number(value) / 1000;
+  view.followLatest = Number(value) >= 1000;
+  drawPidCharts();
+}
+
+function hoverPidChart(event) {
+  const key = event.currentTarget.dataset.pidChart;
+  const rect = event.currentTarget.getBoundingClientRect();
+  state.pidChartHover[key] = {x: event.clientX - rect.left, y: event.clientY - rect.top};
+  drawPidCharts();
+}
+
+function leavePidChart(event) {
+  delete state.pidChartHover[event.currentTarget.dataset.pidChart];
+  drawPidCharts();
+}
+
+function capturePidPollSample(sample) {
+  if (!state.pidLiveReceiving || !sample) return;
+  const timestampMs = Number(sample.timestamp_ms);
+  if (!Number.isFinite(timestampMs)) return;
+  if (state.pidLiveLastSequence === timestampMs) {
+    state.pidLiveDuplicates += 1;
+    updatePidLiveView(false);
+    return;
+  }
+
+  state.pidLiveLastSequence = timestampMs;
+  state.pidLivePackets += 1;
+  state.pidLogSamples.push({
+    sequence: state.pidLivePackets,
+    timeUs: timestampMs * 1000,
+    timestampMs,
+    mode: Number(sample.mode),
+    loopTimeUs: Number(sample.loop_time_us),
+    armed: Boolean(sample.armed),
+    angleRollTarget: Number(sample.angle_roll_target),
+    anglePitchTarget: Number(sample.angle_pitch_target),
+    angleRollState: Number(sample.roll_deg),
+    anglePitchState: Number(sample.pitch_deg),
+    rateRollTarget: Number(sample.rate_roll_target),
+    ratePitchTarget: Number(sample.rate_pitch_target),
+    rateYawTarget: Number(sample.rate_yaw_target),
+    rateRollState: Number(sample.gyro_x_dps),
+    ratePitchState: Number(sample.gyro_y_dps),
+    rateYawState: Number(sample.gyro_z_dps),
+  });
+  const now = performance.now();
+  pidLiveRateWindow.push(now);
+  pidLiveRateWindow = pidLiveRateWindow.filter((time) => now - time <= 1000);
+  state.pidLiveRateHz = pidLiveRateWindow.length;
+  updatePidLiveView(true);
+}
+
+async function startPidLive() {
+  if (state.pidLiveReceiving) return;
+  if (!state.debugPolling) state.debugSample = null;
+  state.pidLiveReceiving = true;
+  state.pidLiveStarting = true;
+  state.pidLogError = '';
+  render();
+  try {
+    await ensureMspDebugConnection();
+    await pollDebugOnce();
+    scheduleDebugPoll();
+  } catch (error) {
+    state.pidLiveReceiving = false;
+    state.pidLogError = error.message || String(error);
+  }
+  state.pidLiveStarting = false;
+  render();
+}
+
+async function stopPidLive() {
+  state.pidLiveReceiving = false;
+  state.pidLiveStarting = false;
+  await stopMspDebugConnectionIfIdle();
+  render();
+}
+
+function clearPidLive() {
+  state.pidLogSamples = []; state.pidLivePackets = 0; state.pidLiveDuplicates = 0;
+  state.pidLiveLastSequence = null; state.pidLiveRateHz = 0; state.pidChartViews = {}; state.pidChartHover = {};
+  pidLiveRateWindow = []; render();
+}
+
+async function savePidLive() {
+  const keys = ['timestampMs','sequence','mode','loopTimeUs','armed','angleRollTarget','angleRollState','anglePitchTarget','anglePitchState','rateRollTarget','rateRollState','ratePitchTarget','ratePitchState','rateYawTarget','rateYawState'];
+  const csv = [keys.join(','), ...state.pidLogSamples.map((sample) => keys.map((key) => sample[key]).join(','))].join('\n');
+  try {
+    const path = await saveBlob(
+      new Blob(['\uFEFF', csv], {type: 'text/csv;charset=utf-8'}),
+      `glrs-pid-live-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`,
+      [{name: 'CSV', extensions: ['csv']}],
+    );
+    if (path) state.message = {type: 'ok', text: t('pidlog.saveSuccess')};
+  } catch (error) {
+    state.message = {type: 'error', text: `${t('pidlog.saveFailed')}: ${error.message || String(error)}`};
+  }
+  render();
 }
 
 function updateDebugView() {
@@ -2765,9 +3627,6 @@ function updateDebugView() {
     'debug-roll': formatDebugValue(sample?.roll_deg, 2, ' deg'),
     'debug-pitch': formatDebugValue(sample?.pitch_deg, 2, ' deg'),
     'debug-yaw': formatDebugValue(sample?.yaw_deg, 2, ' deg'),
-    'debug-accel-roll': formatDebugValue(sample?.accel_roll_deg, 2, ' deg'),
-    'debug-accel-pitch': formatDebugValue(sample?.accel_pitch_deg, 2, ' deg'),
-    'debug-error-angle': `${formatDebugValue(sample ? sample.roll_deg - sample.accel_roll_deg : NaN, 2, ' deg')} / ${formatDebugValue(sample ? sample.pitch_deg - sample.accel_pitch_deg : NaN, 2, ' deg')}`,
   };
   Object.entries(fields).forEach(([id, value]) => {
     const element = document.getElementById(id);
@@ -2897,50 +3756,6 @@ function renderCurrentTab() {
     wifi: renderWifi,
     update: renderUpdate,
   }[state.tab]();
-}
-
-function wireOrientationPreview() {
-  const sliders = document.querySelectorAll('.euler-slider');
-  const numbers = document.querySelectorAll('.euler-number');
-  const board = document.querySelector('#board-preview');
-  const matrixDisplay = document.querySelector('.matrix-display');
-  if (!sliders.length || !board) return;
-
-  function sync() {
-    const roll = Number(document.querySelector('[data-euler="roll"].euler-number')?.value) || 0;
-    const pitch = Number(document.querySelector('[data-euler="pitch"].euler-number')?.value) || 0;
-    const yaw = Number(document.querySelector('[data-euler="yaw"].euler-number')?.value) || 0;
-    state.eulerRoll = roll;
-    state.eulerPitch = pitch;
-    state.eulerYaw = yaw;
-    board.style.transform = boardPreviewTransform(roll, pitch, yaw);
-    if (matrixDisplay) {
-      const m = orientationMatrixFromInstallEuler(roll, pitch, yaw);
-      matrixDisplay.textContent = [
-        formatMatrixRow(m.slice(0, 3)),
-        formatMatrixRow(m.slice(3, 6)),
-        formatMatrixRow(m.slice(6, 9)),
-      ].join('\n');
-    }
-  }
-
-  sliders.forEach((slider) => {
-    slider.addEventListener('input', () => {
-      const axis = slider.dataset.euler;
-      const numInput = document.querySelector(`[data-euler="${axis}"].euler-number`);
-      if (numInput) numInput.value = slider.value;
-      sync();
-    });
-  });
-
-  numbers.forEach((numInput) => {
-    numInput.addEventListener('input', () => {
-      const axis = numInput.dataset.euler;
-      const slider = document.querySelector(`[data-euler="${axis}"].euler-slider`);
-      if (slider) slider.value = numInput.value;
-      sync();
-    });
-  });
 }
 
 function wirePwmForm() {
@@ -3113,28 +3928,62 @@ function wirePwmForm() {
   syncSerial2Visibility();
 }
 
+function mspPollingActive() {
+  return state.debugPolling || state.pidLiveReceiving;
+}
+
+async function ensureMspDebugConnection() {
+  if (mspDebugConnected) return;
+  if (!mspDebugConnectPromise) {
+    mspDebugConnectPromise = tauriInvoke('msp_debug_connect', {apiBase: state.apiBase})
+      .then(() => { mspDebugConnected = true; })
+      .finally(() => { mspDebugConnectPromise = null; });
+  }
+  await mspDebugConnectPromise;
+}
+
 async function pollDebugOnce() {
   if (debugPollInFlight) return;
   const generation = debugPollGeneration;
   debugPollInFlight = true;
   try {
-    const sample = await tauriInvoke('msp_debug_poll');
-    if (generation !== debugPollGeneration || !state.debugPolling) return;
-    if (!sample) return;
-    state.debugSample = sample;
-    state.debugError = '';
-    updateDebugView();
-  } catch (error) {
-    if (generation !== debugPollGeneration || !state.debugPolling) return;
-    state.debugError = error.message || String(error);
-    updateDebugView();
+    if (state.debugPolling) {
+      try {
+        const imuSample = await tauriInvoke('msp_attitude_poll');
+        if (generation !== debugPollGeneration || !state.debugPolling) return;
+        if (imuSample) {
+          state.debugSample = imuSample;
+          state.debugError = '';
+          updateDebugView();
+        }
+      } catch (error) {
+        if (generation === debugPollGeneration && state.debugPolling) {
+          state.debugError = error.message || String(error);
+          updateDebugView();
+        }
+      }
+    }
+    if (state.pidLiveReceiving) {
+      try {
+        const pidSample = await tauriInvoke('msp_pid_poll');
+        if (generation !== debugPollGeneration || !state.pidLiveReceiving) return;
+        if (pidSample) {
+          state.pidLogError = '';
+          capturePidPollSample(pidSample);
+        }
+      } catch (error) {
+        if (generation === debugPollGeneration && state.pidLiveReceiving) {
+          state.pidLogError = error.message || String(error);
+        }
+      }
+    }
   } finally {
     debugPollInFlight = false;
   }
 }
 
 function scheduleDebugPoll() {
-  if (!state.debugPolling || debugPollTimer) return;
+  if (!mspPollingActive() || debugPollTimer) return;
   const intervalMs = Math.max(20, Math.round(1000 / state.debugPollRateHz));
   debugPollTimer = window.setTimeout(async () => {
     debugPollTimer = null;
@@ -3146,33 +3995,42 @@ function scheduleDebugPoll() {
 async function startDebugPolling() {
   state.debugPollRateHz = intOrDefault(document.querySelector('#debug-poll-rate')?.value, 20);
   state.debugError = '';
+  state.debugPolling = true;
+  render();
   try {
-    await tauriInvoke('msp_debug_connect', {apiBase: state.apiBase});
+    await ensureMspDebugConnection();
     debugPollGeneration += 1;
-    state.debugPolling = true;
-    render();
     await pollDebugOnce();
     scheduleDebugPoll();
+    return true;
   } catch (error) {
     state.debugPolling = false;
     state.debugError = error.message || String(error);
     render();
+    return false;
   }
 }
 
 async function stopDebugPolling(disconnect = true) {
+  state.debugPolling = false;
+  await stopMspDebugConnectionIfIdle(disconnect);
+  render();
+}
+
+async function stopMspDebugConnectionIfIdle(disconnect = true) {
+  if (mspPollingActive()) return;
   debugPollGeneration += 1;
   if (debugPollTimer) {
     window.clearTimeout(debugPollTimer);
     debugPollTimer = null;
   }
-  state.debugPolling = false;
-  render();
-  if (disconnect) {
+  if (disconnect && mspDebugConnected) {
     try {
       await tauriInvoke('msp_debug_disconnect');
     } catch {
       // Browser preview has no Tauri backend.
+    } finally {
+      mspDebugConnected = false;
     }
   }
 }
@@ -3182,6 +4040,7 @@ function render() {
     <div class="app">
       <header class="topbar">
         <div class="brand"><h1>${t('app.title')}</h1></div>
+        <div class="connection-status is-${state.connectionStatus}" title="${escapeHtml(apiBaseHost())}"><span></span><strong>${escapeHtml(connectionStatusLabel())}</strong></div>
         <select class="lang-switch" aria-label="${t('lang.label')}">
           <option value="zh-CN" ${selected(getLocale(), 'zh-CN')}>${t('lang.chinese')}</option>
           <option value="en" ${selected(getLocale(), 'en')}>${t('lang.english')}</option>
@@ -3192,11 +4051,6 @@ function render() {
           <button class="secondary" type="button" data-action="refresh" ${state.busy ? 'disabled' : ''}>${t('action.refresh')}</button>
         </form>
       </header>
-      <div class="status">
-        <div class="metric"><span>API</span><strong>${escapeHtml(apiBaseHost())}</strong></div>
-        <div class="metric"><span>${t('status.target')}</span><strong>${escapeHtml(state.target?.['module-type'] || 'RX')}</strong></div>
-        <div class="metric"><span>${t('status.rx')}</span><strong>${escapeHtml(state.target?.['radio-type'] || t('value.unknown'))}</strong></div>
-      </div>
       <div class="shell">
         <nav class="nav">${tabs.map(([id, getLabel]) => `<button type="button" data-tab="${id}" class="${state.tab === id ? 'active' : ''}">${getLabel()}</button>`).join('')}</nav>
         <main class="content">
@@ -3231,7 +4085,7 @@ function wireEvents() {
     event.preventDefault();
     state.apiBase = normalizeApiBase(new FormData(event.currentTarget).get('api'));
     localStorage.setItem(API_STORAGE_KEY, state.apiBase);
-    runBusy(loadDevice, t('message.connected'));
+    void connectDevice(t('message.connected'));
   });
 
   document.querySelectorAll('[data-tab]').forEach((button) => {
@@ -3239,6 +4093,39 @@ function wireEvents() {
       state.tab = button.dataset.tab;
       state.message = null;
       render();
+    });
+  });
+
+  document.querySelectorAll('[data-pid-mode]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.pidLogMode = button.dataset.pidMode;
+      state.pidChartHover = {};
+      render();
+    });
+  });
+  document.querySelectorAll('[data-pid-series]').forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      state.pidLogVisible[checkbox.dataset.pidSeries] = checkbox.checked;
+      drawPidCharts();
+    });
+  });
+  document.querySelector('#pid-live-window')?.addEventListener('change', (event) => {
+    state.pidLiveWindowSeconds = Number(event.target.value);
+    Object.values(state.pidChartViews).forEach((view) => { view.followLatest = true; view.endUs = null; });
+    drawPidCharts();
+  });
+  document.querySelectorAll('[data-pid-chart]').forEach((canvas) => {
+    canvas.addEventListener('wheel', zoomPidTimeline, {passive: false});
+    canvas.addEventListener('pointermove', hoverPidChart);
+    canvas.addEventListener('pointerleave', leavePidChart);
+  });
+  document.querySelectorAll('[data-pid-timeline]').forEach((timeline) => {
+    timeline.addEventListener('input', () => seekPidTimeline(timeline.dataset.pidTimeline, timeline.value));
+  });
+  document.querySelectorAll('[data-pid-latest]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const view = pidChartView(button.dataset.pidLatest);
+      view.followLatest = true; view.endUs = null; drawPidCharts();
     });
   });
 
@@ -3317,15 +4204,16 @@ function wireEvents() {
   wireModeRangeEditors();
 
   syncBindingPreview();
-  wireOrientationPreview();
   wirePwmForm();
   initDebugAircraftView();
+  initOrientationAircraftView();
+  drawPidCharts();
 
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => {
       const action = button.dataset.action;
-      if (action === 'refresh') runBusy(loadDevice, t('message.refreshed'));
-      if (action === 'reboot') postPlain('/reboot', t('message.rebootRequested'));
+      if (action === 'refresh') void connectDevice(t('message.refreshed'));
+      if (action === 'reboot') void rebootDevice();
       if (action === 'reset-model') postPlain('/reset?model', t('message.modelReset'));
       if (action === 'reset-hardware') postPlain('/reset?hardware', t('message.hardwareReset'));
       if (action === 'scan') scanNetworks();
@@ -3334,9 +4222,17 @@ function wireEvents() {
       if (action === 'forget') postPlain('/forget', t('message.networkForgotten'));
       if (action === 'add-motor') changeMixerRowCount(1);
       if (action === 'remove-motor') changeMixerRowCount(-1);
-      if (action === 'quick-orientation') quickOrientationStep();
+      if (action === 'orientation-next') void captureOrientationFace();
+      if (action === 'orientation-reset') resetOrientationCalibration();
+      if (action === 'accel-next') void captureCurrentAccelFace();
+      if (action === 'accel-reset') resetAccelCalibration();
+      if (action === 'gyro-calibrate') void calibrateGyro();
       if (action === 'debug-start') startDebugPolling();
       if (action === 'debug-stop') stopDebugPolling();
+      if (action === 'pidlive-start') void startPidLive();
+      if (action === 'pidlive-stop') void stopPidLive().then(render);
+      if (action === 'pidlive-clear') clearPidLive();
+      if (action === 'pidlive-save') void savePidLive();
       if (action === 'force-confirm') forceUpdate('confirm');
       if (action === 'force-cancel') forceUpdate('cancel');
       if (action === 'app-update-check') checkAppUpdate();
@@ -3392,6 +4288,15 @@ function wireModeRangeEditors() {
         card.querySelectorAll('select, [data-range-handle], [data-range-number]').forEach((input) => {
           input.disabled = disabled;
         });
+        if (modeToggle.name === 'fc_angle_enabled') {
+          const angleImu = document.querySelector('#angle-imu-calibration');
+          document.querySelectorAll('[data-angle-setting]').forEach((setting) => {
+            setting.style.setProperty('display', disabled ? 'none' : 'block');
+            setting.querySelectorAll('input, select, button').forEach((input) => { input.disabled = disabled; });
+          });
+          angleImu?.style.setProperty('display', disabled ? 'none' : 'block');
+          angleImu?.querySelectorAll('input, select, button').forEach((input) => { input.disabled = disabled; });
+        }
       };
       modeToggle.addEventListener('change', syncMode);
       syncMode();
@@ -3465,8 +4370,9 @@ window.addEventListener('beforeunload', (event) => {
 });
 render();
 async function initializeApp() {
+  scheduleConnectionHealthCheck();
   await restoreDownloadedFirmware();
-  await runBusy(loadDevice, t('message.connected'));
+  await connectDevice(t('message.connected'));
   if (isTauriApp()) checkAppUpdate();
 }
 initializeApp();

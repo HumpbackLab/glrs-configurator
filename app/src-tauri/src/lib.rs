@@ -5,7 +5,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tauri::Manager;
 
-const MSP_ELRS_FC_DEBUG: u16 = 0x0450;
+const MSP_ELRS_FC_PID_DEBUG: u16 = 0x0451;
+const MSP_ELRS_FC_ATTITUDE_DEBUG: u16 = 0x0455;
 const MSP_DEBUG_PORT: u16 = 5761;
 const MSP_DEBUG_TIMEOUT_MS: u64 = 500;
 
@@ -14,12 +15,28 @@ struct MspDebugState {
 }
 
 #[derive(Serialize)]
-struct FcDebugSample {
+struct PidDebugSample {
+    mode: u8,
+    armed: bool,
+    timestamp_ms: u32,
+    loop_time_us: u16,
+    angle_roll_target: f32,
+    angle_pitch_target: f32,
+    rate_roll_target: f32,
+    rate_pitch_target: f32,
+    rate_yaw_target: f32,
+    roll_deg: f32,
+    pitch_deg: f32,
+    gyro_x_dps: f32,
+    gyro_y_dps: f32,
+    gyro_z_dps: f32,
+}
+
+#[derive(Serialize)]
+struct AttitudeDebugSample {
     roll_deg: f32,
     pitch_deg: f32,
     yaw_deg: f32,
-    accel_roll_deg: f32,
-    accel_pitch_deg: f32,
 }
 
 fn crc8_dvb_s2(mut crc: u8, value: u8) -> u8 {
@@ -34,21 +51,23 @@ fn crc8_dvb_s2(mut crc: u8, value: u8) -> u8 {
     crc
 }
 
-fn msp_v2_request(function: u16) -> [u8; 9] {
-    let mut frame = [0u8; 9];
+fn msp_v2_request(function: u16, payload: &[u8]) -> Vec<u8> {
+    let mut frame = vec![0u8; payload.len() + 9];
     frame[0] = b'$';
     frame[1] = b'X';
     frame[2] = b'<';
     frame[3] = 0;
     frame[4] = (function & 0xFF) as u8;
     frame[5] = (function >> 8) as u8;
-    frame[6] = 0;
-    frame[7] = 0;
+    frame[6] = (payload.len() & 0xFF) as u8;
+    frame[7] = (payload.len() >> 8) as u8;
+    frame[8..8 + payload.len()].copy_from_slice(payload);
     let mut crc = 0;
-    for byte in &frame[3..8] {
+    for byte in &frame[3..8 + payload.len()] {
         crc = crc8_dvb_s2(crc, *byte);
     }
-    frame[8] = crc;
+    let crc_offset = frame.len() - 1;
+    frame[crc_offset] = crc;
     frame
 }
 
@@ -63,6 +82,12 @@ fn read_u16(payload: &[u8], offset: &mut usize) -> Result<u16, String> {
 
 fn read_i16(payload: &[u8], offset: &mut usize) -> Result<i16, String> {
     Ok(read_u16(payload, offset)? as i16)
+}
+
+fn read_u32(payload: &[u8], offset: &mut usize) -> Result<u32, String> {
+    let low = read_u16(payload, offset)? as u32;
+    let high = read_u16(payload, offset)? as u32;
+    Ok(low | (high << 16))
 }
 
 fn read_exact_timeout(stream: &mut TcpStream, buffer: &mut [u8]) -> Result<bool, String> {
@@ -81,23 +106,54 @@ fn read_exact_timeout(stream: &mut TcpStream, buffer: &mut [u8]) -> Result<bool,
     Ok(true)
 }
 
-fn parse_debug_payload(payload: &[u8]) -> Result<FcDebugSample, String> {
-    let mut offset = 0usize;
-    if payload.len() != 10 {
-        return Err("short MSP debug payload".into());
+fn parse_pid_debug_payload(payload: &[u8]) -> Result<PidDebugSample, String> {
+    if payload.len() != 28 {
+        return Err("invalid MSP PID payload length".into());
     }
+    let mut offset = 0usize;
+    let mode = payload[offset];
+    let armed = payload[offset + 1] & 1 != 0;
+    offset += 2;
+    let timestamp_ms = read_u32(payload, &mut offset)?;
+    let loop_time_us = read_u16(payload, &mut offset)?;
+    let angle_roll_target_cd = read_i16(payload, &mut offset)?;
+    let angle_pitch_target_cd = read_i16(payload, &mut offset)?;
     let roll_cd = read_i16(payload, &mut offset)?;
     let pitch_cd = read_i16(payload, &mut offset)?;
-    let yaw_cd = read_i16(payload, &mut offset)?;
-    let accel_roll_cd = read_i16(payload, &mut offset)?;
-    let accel_pitch_cd = read_i16(payload, &mut offset)?;
+    let rate_roll_target_ddps = read_i16(payload, &mut offset)?;
+    let rate_pitch_target_ddps = read_i16(payload, &mut offset)?;
+    let rate_yaw_target_ddps = read_i16(payload, &mut offset)?;
+    let gyro_x_cdps = read_i16(payload, &mut offset)?;
+    let gyro_y_cdps = read_i16(payload, &mut offset)?;
+    let gyro_z_cdps = read_i16(payload, &mut offset)?;
 
-    Ok(FcDebugSample {
+    Ok(PidDebugSample {
+        mode,
+        armed,
+        timestamp_ms,
+        loop_time_us,
+        angle_roll_target: angle_roll_target_cd as f32 / 100.0,
+        angle_pitch_target: angle_pitch_target_cd as f32 / 100.0,
+        rate_roll_target: rate_roll_target_ddps as f32 / 10.0,
+        rate_pitch_target: rate_pitch_target_ddps as f32 / 10.0,
+        rate_yaw_target: rate_yaw_target_ddps as f32 / 10.0,
         roll_deg: roll_cd as f32 / 100.0,
         pitch_deg: pitch_cd as f32 / 100.0,
-        yaw_deg: yaw_cd as f32 / 100.0,
-        accel_roll_deg: accel_roll_cd as f32 / 100.0,
-        accel_pitch_deg: accel_pitch_cd as f32 / 100.0,
+        gyro_x_dps: gyro_x_cdps as f32 / 100.0,
+        gyro_y_dps: gyro_y_cdps as f32 / 100.0,
+        gyro_z_dps: gyro_z_cdps as f32 / 100.0,
+    })
+}
+
+fn parse_attitude_debug_payload(payload: &[u8]) -> Result<AttitudeDebugSample, String> {
+    if payload.len() != 6 {
+        return Err("invalid MSP attitude payload length".into());
+    }
+    let mut offset = 0usize;
+    Ok(AttitudeDebugSample {
+        roll_deg: read_i16(payload, &mut offset)? as f32 / 100.0,
+        pitch_deg: read_i16(payload, &mut offset)? as f32 / 100.0,
+        yaw_deg: read_i16(payload, &mut offset)? as f32 / 100.0,
     })
 }
 
@@ -157,8 +213,11 @@ fn msp_debug_disconnect(state: tauri::State<MspDebugState>) -> Result<(), String
     Ok(())
 }
 
-#[tauri::command]
-fn msp_debug_poll(state: tauri::State<MspDebugState>) -> Result<Option<FcDebugSample>, String> {
+fn poll_msp_debug_payload(
+    state: tauri::State<MspDebugState>,
+    request_function: u16,
+    request_payload: &[u8],
+) -> Result<Option<Vec<u8>>, String> {
     let mut guard = state
         .stream
         .lock()
@@ -166,7 +225,7 @@ fn msp_debug_poll(state: tauri::State<MspDebugState>) -> Result<Option<FcDebugSa
     let stream = guard
         .as_mut()
         .ok_or_else(|| "MSP debug socket is not connected".to_string())?;
-    let request = msp_v2_request(MSP_ELRS_FC_DEBUG);
+    let request = msp_v2_request(request_function, request_payload);
     stream
         .write_all(&request)
         .map_err(|error| error.to_string())?;
@@ -179,7 +238,7 @@ fn msp_debug_poll(state: tauri::State<MspDebugState>) -> Result<Option<FcDebugSa
         return Err("invalid MSP debug response header".into());
     }
     let function = u16::from_le_bytes([header[4], header[5]]);
-    if function != MSP_ELRS_FC_DEBUG {
+    if function != request_function {
         return Err(format!("unexpected MSP response function 0x{function:04X}"));
     }
     let payload_len = u16::from_le_bytes([header[6], header[7]]) as usize;
@@ -197,7 +256,23 @@ fn msp_debug_poll(state: tauri::State<MspDebugState>) -> Result<Option<FcDebugSa
     if crc != payload_and_crc[payload_len] {
         return Err("invalid MSP debug response crc".into());
     }
-    parse_debug_payload(&payload_and_crc[..payload_len]).map(Some)
+    Ok(Some(payload_and_crc[..payload_len].to_vec()))
+}
+
+#[tauri::command]
+fn msp_pid_poll(state: tauri::State<MspDebugState>) -> Result<Option<PidDebugSample>, String> {
+    poll_msp_debug_payload(state, MSP_ELRS_FC_PID_DEBUG, &[])?
+        .map(|payload| parse_pid_debug_payload(&payload))
+        .transpose()
+}
+
+#[tauri::command]
+fn msp_attitude_poll(
+    state: tauri::State<MspDebugState>,
+) -> Result<Option<AttitudeDebugSample>, String> {
+    poll_msp_debug_payload(state, MSP_ELRS_FC_ATTITUDE_DEBUG, &[])?
+        .map(|payload| parse_attitude_debug_payload(&payload))
+        .transpose()
 }
 
 #[cfg(desktop)]
@@ -1236,7 +1311,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             msp_debug_connect,
             msp_debug_disconnect,
-            msp_debug_poll,
+            msp_attitude_poll,
+            msp_pid_poll,
             #[cfg(desktop)]
             app_updates::check_app_update,
             #[cfg(desktop)]
