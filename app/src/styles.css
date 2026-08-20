@@ -1626,6 +1626,75 @@ button:disabled {
   .orientation-aircraft-wrapper { min-height: 260px; }
 }
 
+.gyro-bias-mode {
+  border: 0;
+  display: grid;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 0;
+}
+
+.gyro-bias-mode legend {
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 7px;
+}
+
+.gyro-bias-option {
+  align-items: flex-start;
+  background: #fff;
+  border: 1px solid #d8e1e8;
+  border-radius: 7px;
+  cursor: pointer;
+  display: flex;
+  gap: 9px;
+  padding: 9px 10px;
+  transition: border-color 180ms ease, background-color 180ms ease;
+}
+
+.gyro-bias-option:hover {
+  background: #f7fbff;
+  border-color: #94b9d8;
+}
+
+.gyro-bias-option:has(input:checked) {
+  background: #eef6ff;
+  border-color: #397fbd;
+}
+
+.gyro-bias-option:has(input:focus-visible) {
+  box-shadow: 0 0 0 3px rgba(57, 127, 189, 0.2);
+}
+
+.gyro-bias-option input {
+  accent-color: #397fbd;
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+
+.gyro-bias-option span { display: grid; gap: 2px; }
+.gyro-bias-option strong { font-size: 12px; }
+.gyro-bias-option small { color: #667384; font-size: 11px; line-height: 1.4; }
+
+.gyro-bias-option .gyro-bias-option-title {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gyro-bias-option-title em {
+  background: #fff4d6;
+  border: 1px solid #e9c96d;
+  border-radius: 999px;
+  color: #78570b;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.3;
+  padding: 2px 7px;
+}
+
 /* ---- PID live charts ---- */
 
 .pid-log-layout {

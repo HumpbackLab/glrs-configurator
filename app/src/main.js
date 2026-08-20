@@ -1023,24 +1023,21 @@ async function saveFlight(event) {
       throw new Error(t('error.invalidGyroLpf'));
     }
     nextConfig.fc_gyro_lpf_hz = gyroLpfHz;
+    nextConfig.fc_gyro_bias_mode = intOrDefault(form.fc_gyro_bias_mode.value, 0);
     nextConfig.fc_mixer = readNumGrid(form, 'fc_mixer', motorCount(), 4);
     nextConfig.fc_mixer_servos = readMixerServos(form, motorCount());
     nextConfig.fc_orientation = orientationMatrixOrIdentity(state.orientationMatrix).map(round4);
-    if (angleEnabled) {
-      nextConfig.fc_gyro_bias = readNumGrid(form, 'fc_gyro_bias', 1, 3);
-      nextConfig.fc_accel_bias = readNumGrid(form, 'fc_accel_bias', 1, 3);
-      nextConfig.fc_accel_scale = readNumGrid(form, 'fc_accel_scale', 1, 3);
+    nextConfig.fc_gyro_bias = readNumGrid(form, 'fc_gyro_bias', 1, 3);
+    nextConfig.fc_accel_bias = readNumGrid(form, 'fc_accel_bias', 1, 3);
+    nextConfig.fc_accel_scale = readNumGrid(form, 'fc_accel_scale', 1, 3);
+    if (nextConfig.fc_gyro_bias.some((value) => Math.abs(value) > 100)) {
+      throw new Error(t('error.gyroBiasRange'));
     }
-    if (angleEnabled) {
-      if (nextConfig.fc_gyro_bias.some((value) => Math.abs(value) > 100)) {
-        throw new Error(t('error.gyroBiasRange'));
-      }
-      if (nextConfig.fc_accel_bias.some((value) => Math.abs(value) > 20)) {
-        throw new Error(t('error.accelBiasRange'));
-      }
-      if (nextConfig.fc_accel_scale.some((value) => value <= 0.5 || value >= 1.5)) {
-        throw new Error(t('error.accelScaleRange'));
-      }
+    if (nextConfig.fc_accel_bias.some((value) => Math.abs(value) > 20)) {
+      throw new Error(t('error.accelBiasRange'));
+    }
+    if (nextConfig.fc_accel_scale.some((value) => value <= 0.5 || value >= 1.5)) {
+      throw new Error(t('error.accelScaleRange'));
     }
     delete nextConfig.pwm;
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(nextConfig)});
@@ -1991,6 +1988,7 @@ function profileFlightConfig() {
       angleRateLimitsDps: flightConfigValue('fc_angle_rate_limits_dps', [100, 100]),
       dtermLpfHz: flightConfigValue('fc_dterm_lpf_hz', 20),
       gyroLpfHz: flightConfigValue('fc_gyro_lpf_hz', 30),
+      gyroBiasMode: flightConfigValue('fc_gyro_bias_mode', 0),
       mixer: flightConfigValue('fc_mixer', []),
       mixerServos: flightConfigValue('fc_mixer_servos', []),
       orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4),
@@ -2024,6 +2022,7 @@ function profileFlightConfig() {
     ],
     dtermLpfHz: intOrDefault(form.fc_dterm_lpf_hz.value, 20),
     gyroLpfHz: intOrDefault(form.fc_gyro_lpf_hz.value, 30),
+    gyroBiasMode: intOrDefault(form.fc_gyro_bias_mode.value, 0),
     mixer: readNumGrid(form, 'fc_mixer', motorCount(), 4),
     mixerServos: readMixerServos(form, motorCount()),
     orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4),
@@ -2259,6 +2258,7 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
       fc_angle_rate_limits_dps: angleRateLimitsDps,
       fc_dterm_lpf_hz: dtermLpfHz,
       fc_gyro_lpf_hz: gyroLpfHz,
+      fc_gyro_bias_mode: requireProfileNumber(profile.flight.gyroBiasMode ?? 0, 'Gyro bias mode', 0, 1, true),
       fc_mixer: mixer.map(Number),
       fc_mixer_count: mixer.length,
       fc_mixer_servos: Array.from({length: mixerOutputCount}, (_, index) => Boolean(mixerServos[index])),
@@ -3084,6 +3084,7 @@ function renderImuCalibration() {
   const accelBias = calibration.accelBias || configValue('fc_accel_bias', [0, 0, 0]);
   const accelScale = calibration.accelScale || configValue('fc_accel_scale', [1, 1, 1]);
   const busy = Boolean(calibration.busy || state.orientationCal.busy);
+  const gyroBiasMode = Number(flightConfigValue('fc_gyro_bias_mode', 0));
   const faceButtons = ACCEL_CAL_FACES.map((face, index) => {
     const done = Boolean(calibration.accelFaces[index]);
     const classes = ['imu-face-button', done ? 'is-done' : 'is-pending'].join(' ');
@@ -3113,6 +3114,17 @@ function renderImuCalibration() {
             <div><h3>${t('imuCalibration.gyroTitle')}</h3><p>${t('imuCalibration.gyroDescription')}</p></div>
             ${calibration.gyroBias ? `<span class="cal-ready">${t('imuCalibration.ready')}</span>` : ''}
           </div>
+          <fieldset class="gyro-bias-mode">
+            <legend>${t('imuCalibration.gyroBiasMode')}</legend>
+            <label class="gyro-bias-option">
+              <input type="radio" name="fc_gyro_bias_mode" value="0" ${checked(gyroBiasMode === 0)}>
+              <span><strong>${t('imuCalibration.configuredBias')}</strong><small>${t('imuCalibration.configuredBiasHelp')}</small></span>
+            </label>
+            <label class="gyro-bias-option">
+              <input type="radio" name="fc_gyro_bias_mode" value="1" ${checked(gyroBiasMode === 1)}>
+              <span><span class="gyro-bias-option-title"><strong>${t('imuCalibration.armSampleBias')}</strong><em>${t('imuCalibration.quadcopterRecommended')}</em></span><small>${t('imuCalibration.armSampleBiasHelp')}</small></span>
+            </label>
+          </fieldset>
           <div class="gyro-still-visual"><div class="gyro-icon" aria-hidden="true">⊕</div><strong>${t('imuCalibration.keepStill')}</strong><small>${t('imuCalibration.gyroDuration')}</small></div>
           <div class="actions"><button class="secondary" type="button" data-action="gyro-calibrate" ${state.busy || busy ? 'disabled' : ''}>${t('imuCalibration.startGyro')}</button></div>
           ${calibration.busy === 'gyro' ? `<div class="calibrating-overlay" role="status" aria-live="polite"><span aria-hidden="true"></span>${t('imuCalibration.sampling')}</div>` : ''}
@@ -3284,7 +3296,7 @@ function renderFlight() {
           <label>${t('flight.boardOrientation')}</label>
           ${renderOrientationCalibration(installEuler)}
         </div>
-        <div id="angle-imu-calibration" style="display:${angleEnabled ? 'block' : 'none'}">${renderImuCalibration()}</div>
+        <div id="imu-calibration">${renderImuCalibration()}</div>
         <div class="actions"><button class="primary" ${state.busy || state.imuCalibration.busy || state.orientationCal.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot" ${state.busy || state.imuCalibration.busy || state.orientationCal.busy ? 'disabled' : ''}>${t('action.reboot')}</button></div>
       </form>
     </section>`;
@@ -4289,13 +4301,10 @@ function wireModeRangeEditors() {
           input.disabled = disabled;
         });
         if (modeToggle.name === 'fc_angle_enabled') {
-          const angleImu = document.querySelector('#angle-imu-calibration');
           document.querySelectorAll('[data-angle-setting]').forEach((setting) => {
             setting.style.setProperty('display', disabled ? 'none' : 'block');
             setting.querySelectorAll('input, select, button').forEach((input) => { input.disabled = disabled; });
           });
-          angleImu?.style.setProperty('display', disabled ? 'none' : 'block');
-          angleImu?.querySelectorAll('input, select, button').forEach((input) => { input.disabled = disabled; });
         }
       };
       modeToggle.addEventListener('change', syncMode);
