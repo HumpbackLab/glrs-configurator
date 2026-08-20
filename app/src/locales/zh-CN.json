@@ -376,7 +376,7 @@
     "gyroBiasMode": "飞行控制使用的陀螺仪零漂来源",
     "configuredBias": "配置器校准（默认）",
     "configuredBiasHelp": "使用下方保存到固件配置中的三轴零偏，解锁时不重新采样。",
-    "armSampleBias": "解锁时重新采样",
+    "armSampleBias": "解锁时自动校准",
     "quadcopterRecommended": "建议四旋翼开启",
     "armSampleBiasHelp": "收到解锁请求后保持锁定，采集 100 个样本并只更新本次运行的控制零偏；不会写入配置。",
     "progress": "{done}/6 面",

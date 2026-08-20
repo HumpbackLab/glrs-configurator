@@ -3107,6 +3107,10 @@ function renderImuCalibration() {
             : t('imuCalibration.accelReady')}</div>
           <div class="imu-face-actions">${faceButtons}</div>
           <div class="actions"><button class="primary" type="button" data-action="accel-next" ${state.busy || busy || completed >= ACCEL_CAL_FACES.length ? 'disabled' : ''}>${t('imuCalibration.nextStep')}</button><button class="secondary" type="button" data-action="accel-reset" ${state.busy || busy ? 'disabled' : ''}>${t('imuCalibration.resetAccel')}</button></div>
+          <div class="imu-card-results imu-accel-results">
+            <div><strong>${t('imuCalibration.accelBias')}</strong>${renderNumGrid('fc_accel_bias', [t('imuCalibration.offset')], ['X', 'Y', 'Z'], accelBias, {rowHeader: t('flight.axis')})}</div>
+            <div><strong>${t('imuCalibration.accelScale')}</strong>${renderNumGrid('fc_accel_scale', [t('imuCalibration.scale')], ['X', 'Y', 'Z'], accelScale, {rowHeader: t('flight.axis')})}</div>
+          </div>
           ${calibration.busy === 'accel-detect' ? `<div class="calibrating-overlay" role="status" aria-live="polite"><span aria-hidden="true"></span>${t('imuCalibration.detectingFace')}</div>` : ''}
         </section>
         <section class="imu-cal-card ${calibration.busy === 'gyro' ? 'is-calibrating' : ''}">
@@ -3114,26 +3118,34 @@ function renderImuCalibration() {
             <div><h3>${t('imuCalibration.gyroTitle')}</h3><p>${t('imuCalibration.gyroDescription')}</p></div>
             ${calibration.gyroBias ? `<span class="cal-ready">${t('imuCalibration.ready')}</span>` : ''}
           </div>
-          <fieldset class="gyro-bias-mode">
-            <legend>${t('imuCalibration.gyroBiasMode')}</legend>
-            <label class="gyro-bias-option">
-              <input type="radio" name="fc_gyro_bias_mode" value="0" ${checked(gyroBiasMode === 0)}>
-              <span><strong>${t('imuCalibration.configuredBias')}</strong><small>${t('imuCalibration.configuredBiasHelp')}</small></span>
-            </label>
-            <label class="gyro-bias-option">
-              <input type="radio" name="fc_gyro_bias_mode" value="1" ${checked(gyroBiasMode === 1)}>
-              <span><span class="gyro-bias-option-title"><strong>${t('imuCalibration.armSampleBias')}</strong><em>${t('imuCalibration.quadcopterRecommended')}</em></span><small>${t('imuCalibration.armSampleBiasHelp')}</small></span>
-            </label>
-          </fieldset>
-          <div class="gyro-still-visual"><div class="gyro-icon" aria-hidden="true">⊕</div><strong>${t('imuCalibration.keepStill')}</strong><small>${t('imuCalibration.gyroDuration')}</small></div>
-          <div class="actions"><button class="secondary" type="button" data-action="gyro-calibrate" ${state.busy || busy ? 'disabled' : ''}>${t('imuCalibration.startGyro')}</button></div>
+          <div class="gyro-calibration-body">
+            <fieldset class="gyro-bias-mode">
+              <legend>${t('imuCalibration.gyroBiasMode')}</legend>
+              <div class="gyro-bias-options">
+                <label class="gyro-bias-option">
+                  <input type="radio" name="fc_gyro_bias_mode" value="0" ${checked(gyroBiasMode === 0)}>
+                  <span class="gyro-bias-status" aria-hidden="true"></span>
+                  <span class="gyro-bias-check" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m5 12 4 4 10-10"/></svg></span>
+                  <span class="gyro-bias-option-content"><strong>${t('imuCalibration.configuredBias')}</strong><small>${t('imuCalibration.configuredBiasHelp')}</small></span>
+                </label>
+                <label class="gyro-bias-option">
+                  <input type="radio" name="fc_gyro_bias_mode" value="1" ${checked(gyroBiasMode === 1)}>
+                  <span class="gyro-bias-status" aria-hidden="true"></span>
+                  <span class="gyro-bias-check" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m5 12 4 4 10-10"/></svg></span>
+                  <span class="gyro-bias-option-content"><span class="gyro-bias-option-title"><strong>${t('imuCalibration.armSampleBias')}</strong><em>${t('imuCalibration.quadcopterRecommended')}</em></span><small>${t('imuCalibration.armSampleBiasHelp')}</small></span>
+                </label>
+              </div>
+            </fieldset>
+            <div class="gyro-calibration-action">
+              <div class="gyro-still-visual"><div class="gyro-icon" aria-hidden="true">⊕</div><strong>${t('imuCalibration.keepStill')}</strong><small>${t('imuCalibration.gyroDuration')}</small></div>
+              <div class="actions"><button class="secondary" type="button" data-action="gyro-calibrate" ${state.busy || busy || gyroBiasMode === 1 ? 'disabled' : ''}>${t('imuCalibration.startGyro')}</button></div>
+            </div>
+          </div>
+          <div class="imu-card-results imu-gyro-results">
+            <div><strong>${t('imuCalibration.gyroBias')}</strong>${renderNumGrid('fc_gyro_bias', [t('imuCalibration.offset')], ['X', 'Y', 'Z'], gyroBias, {rowHeader: t('flight.axis')})}</div>
+          </div>
           ${calibration.busy === 'gyro' ? `<div class="calibrating-overlay" role="status" aria-live="polite"><span aria-hidden="true"></span>${t('imuCalibration.sampling')}</div>` : ''}
         </section>
-      </div>
-      <div class="imu-cal-results">
-        <div><strong>${t('imuCalibration.gyroBias')}</strong>${renderNumGrid('fc_gyro_bias', [t('imuCalibration.offset')], ['X', 'Y', 'Z'], gyroBias, {rowHeader: t('flight.axis')})}</div>
-        <div><strong>${t('imuCalibration.accelBias')}</strong>${renderNumGrid('fc_accel_bias', [t('imuCalibration.offset')], ['X', 'Y', 'Z'], accelBias, {rowHeader: t('flight.axis')})}</div>
-        <div><strong>${t('imuCalibration.accelScale')}</strong>${renderNumGrid('fc_accel_scale', [t('imuCalibration.scale')], ['X', 'Y', 'Z'], accelScale, {rowHeader: t('flight.axis')})}</div>
       </div>
       <div class="helper">${t('imuCalibration.saveHelp')}</div>
     </div>`;
@@ -4214,6 +4226,16 @@ function wireEvents() {
   }
 
   wireModeRangeEditors();
+
+  const gyroBiasModeInputs = document.querySelectorAll('input[name="fc_gyro_bias_mode"]');
+  const gyroCalibrateButton = document.querySelector('[data-action="gyro-calibrate"]');
+  const syncGyroCalibrationAvailability = () => {
+    if (!gyroCalibrateButton) return;
+    const autoCalibrationSelected = document.querySelector('input[name="fc_gyro_bias_mode"][value="1"]')?.checked;
+    gyroCalibrateButton.disabled = Boolean(autoCalibrationSelected || state.busy || state.imuCalibration.busy || state.orientationCal.busy);
+  };
+  gyroBiasModeInputs.forEach((input) => input.addEventListener('change', syncGyroCalibrationAvailability));
+  syncGyroCalibrationAvailability();
 
   syncBindingPreview();
   wirePwmForm();
