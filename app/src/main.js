@@ -3077,7 +3077,7 @@ function renderActivationRange(id, label, description, range, tone, disabled = f
     </div>`;
 }
 
-function renderImuCalibration() {
+function renderImuCalibration(angleEnabled) {
   const calibration = state.imuCalibration;
   const completed = calibration.accelFaces.filter(Boolean).length;
   const gyroBias = calibration.gyroBias || configValue('fc_gyro_bias', [0, 0, 0]);
@@ -3097,7 +3097,7 @@ function renderImuCalibration() {
       <label>${t('imuCalibration.heading')}</label>
       <div class="notice">${t('imuCalibration.safety')}</div>
       <div class="imu-calibration-grid">
-        <section class="imu-cal-card ${calibration.busy === 'accel-detect' ? 'is-calibrating' : ''}">
+        <section class="imu-cal-card ${calibration.busy === 'accel-detect' ? 'is-calibrating' : ''}" data-angle-calibration ${angleEnabled ? '' : 'hidden'}>
           <div class="imu-card-heading">
             <div><h3>${t('imuCalibration.accelTitle')}</h3><p>${t('imuCalibration.accelDescription')}</p></div>
             <span class="cal-progress">${t('imuCalibration.progress', {done: completed})}</span>
@@ -3136,12 +3136,12 @@ function renderImuCalibration() {
                 </label>
               </div>
             </fieldset>
-            <div class="gyro-calibration-action">
+            <div class="gyro-calibration-action" data-gyro-calibration-action style="display:${gyroBiasMode === 1 ? 'none' : 'flex'}">
               <div class="gyro-still-visual"><div class="gyro-icon" aria-hidden="true">⊕</div><strong>${t('imuCalibration.keepStill')}</strong><small>${t('imuCalibration.gyroDuration')}</small></div>
               <div class="actions"><button class="secondary" type="button" data-action="gyro-calibrate" ${state.busy || busy || gyroBiasMode === 1 ? 'disabled' : ''}>${t('imuCalibration.startGyro')}</button></div>
             </div>
           </div>
-          <div class="imu-card-results imu-gyro-results">
+          <div class="imu-card-results imu-gyro-results" data-gyro-bias-results style="display:${gyroBiasMode === 1 ? 'none' : 'grid'}">
             <div><strong>${t('imuCalibration.gyroBias')}</strong>${renderNumGrid('fc_gyro_bias', [t('imuCalibration.offset')], ['X', 'Y', 'Z'], gyroBias, {rowHeader: t('flight.axis')})}</div>
           </div>
           ${calibration.busy === 'gyro' ? `<div class="calibrating-overlay" role="status" aria-live="polite"><span aria-hidden="true"></span>${t('imuCalibration.sampling')}</div>` : ''}
@@ -3308,7 +3308,7 @@ function renderFlight() {
           <label>${t('flight.boardOrientation')}</label>
           ${renderOrientationCalibration(installEuler)}
         </div>
-        <div id="imu-calibration">${renderImuCalibration()}</div>
+        <div id="imu-calibration">${renderImuCalibration(angleEnabled)}</div>
         <div class="actions"><button class="primary" ${state.busy || state.imuCalibration.busy || state.orientationCal.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot" ${state.busy || state.imuCalibration.busy || state.orientationCal.busy ? 'disabled' : ''}>${t('action.reboot')}</button></div>
       </form>
     </section>`;
@@ -4229,10 +4229,15 @@ function wireEvents() {
 
   const gyroBiasModeInputs = document.querySelectorAll('input[name="fc_gyro_bias_mode"]');
   const gyroCalibrateButton = document.querySelector('[data-action="gyro-calibrate"]');
+  const gyroCalibrationAction = document.querySelector('[data-gyro-calibration-action]');
+  const gyroBiasResults = document.querySelector('[data-gyro-bias-results]');
   const syncGyroCalibrationAvailability = () => {
-    if (!gyroCalibrateButton) return;
     const autoCalibrationSelected = document.querySelector('input[name="fc_gyro_bias_mode"][value="1"]')?.checked;
-    gyroCalibrateButton.disabled = Boolean(autoCalibrationSelected || state.busy || state.imuCalibration.busy || state.orientationCal.busy);
+    if (gyroCalibrateButton) {
+      gyroCalibrateButton.disabled = Boolean(autoCalibrationSelected || state.busy || state.imuCalibration.busy || state.orientationCal.busy);
+    }
+    if (gyroCalibrationAction) gyroCalibrationAction.style.display = autoCalibrationSelected ? 'none' : 'flex';
+    if (gyroBiasResults) gyroBiasResults.style.display = autoCalibrationSelected ? 'none' : 'grid';
   };
   gyroBiasModeInputs.forEach((input) => input.addEventListener('change', syncGyroCalibrationAvailability));
   syncGyroCalibrationAvailability();
@@ -4326,6 +4331,9 @@ function wireModeRangeEditors() {
           document.querySelectorAll('[data-angle-setting]').forEach((setting) => {
             setting.style.setProperty('display', disabled ? 'none' : 'block');
             setting.querySelectorAll('input, select, button').forEach((input) => { input.disabled = disabled; });
+          });
+          document.querySelectorAll('[data-angle-calibration]').forEach((calibration) => {
+            calibration.hidden = disabled;
           });
         }
       };
