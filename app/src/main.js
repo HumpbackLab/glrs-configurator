@@ -116,6 +116,7 @@ const state = {
     busyId: '',
     usageProfileId: '',
     usageById: {},
+    usageLoadingById: {},
     error: '',
   },
 };
@@ -2326,12 +2327,32 @@ function communityUsageInstructions(profile) {
   const flight = profile?.flight;
   if (!flight) return [];
 
-  const mixerOutputCount = Array.isArray(flight.mixer) ? Math.floor(flight.mixer.length / 4) : 0;
+  const mixer = Array.isArray(flight.mixer) ? flight.mixer : [];
+  const mixerOutputCount = Math.floor(mixer.length / 4);
   const mixerServos = Array.isArray(flight.mixerServos) ? flight.mixerServos : [];
-  const outputs = Array.from({length: mixerOutputCount}, (_, index) => t(
-    mixerServos[index] ? 'community.catalog.usageServo' : 'community.catalog.usageMotor',
-    {output: index + 1},
-  ));
+  const mixerAxes = [
+    'community.catalog.mixerThrottle',
+    'community.catalog.mixerRoll',
+    'community.catalog.mixerPitch',
+    'community.catalog.mixerYaw',
+  ];
+  const outputs = Array.from({length: mixerOutputCount}, (_, index) => index)
+    .filter((index) => !mixer.slice(index * 4, index * 4 + 4).every((value) => Number(value) === 0))
+    .map((index) => {
+      const row = mixer.slice(index * 4, index * 4 + 4);
+      const mix = row
+        .map((value, axis) => ({value: Number(value), axis}))
+        .filter(({value}) => value !== 0)
+        .map(({value, axis}) => t('community.catalog.mixerAxis', {
+          value: Number((value * 100).toFixed(2)),
+          axis: t(mixerAxes[axis]),
+        }))
+        .join(t('community.catalog.mixerSeparator'));
+      return t(
+        mixerServos[index] ? 'community.catalog.usageServo' : 'community.catalog.usageMotor',
+        {output: index + 1, mix},
+      );
+    });
 
   const switches = [];
   if (flight.arm?.enabled && Number.isInteger(Number(flight.arm.channel))) {
@@ -2398,6 +2419,8 @@ async function loadCommunityCatalog() {
     state.communityCatalog.profiles = catalog.profiles;
     state.communityCatalog.generatedAt = catalog.generatedAt || '';
     state.communityCatalog.status = 'ready';
+    state.communityCatalog.usageLoadingById = Object.fromEntries(catalog.profiles.map((item) => [item.id, true]));
+    void preloadCommunityUsage(catalog.profiles);
   } catch (error) {
     state.communityCatalog.status = 'error';
     state.communityCatalog.error = error.name === 'AbortError'
@@ -2407,6 +2430,19 @@ async function loadCommunityCatalog() {
     window.clearTimeout(timeout);
     render();
   }
+}
+
+async function preloadCommunityUsage(profiles) {
+  await Promise.all(profiles.map(async (item) => {
+    try {
+      state.communityCatalog.usageById[item.id] = await fetchCommunityProfile(item);
+    } catch {
+      // Keep the card visible even if an optional usage preload fails.
+    } finally {
+      delete state.communityCatalog.usageLoadingById[item.id];
+      render();
+    }
+  }));
 }
 
 function communityFilteredProfiles() {
@@ -2434,8 +2470,8 @@ function renderCommunityProfileCards() {
   return profiles.map((item) => {
     const busy = state.communityCatalog.busyId === item.id;
     const compatible = Boolean(currentTarget && item.target && currentTarget === item.target);
-    const usageOpen = state.communityCatalog.usageProfileId === item.id;
     const usage = communityUsageInstructions(state.communityCatalog.usageById[item.id]);
+    const usageLoading = Boolean(state.communityCatalog.usageLoadingById[item.id]);
     return `<article class="community-profile-card">
       <div class="community-profile-heading">
         <div><h3>${escapeHtml(item.title)}</h3><span>${escapeHtml(item.authorName || t('value.unknown'))}</span></div>
@@ -2447,12 +2483,11 @@ function renderCommunityProfileCards() {
         <span>${t('community.catalog.motors')}: <strong>${escapeHtml(item.profileSummary?.motorCount ?? 0)}</strong></span>
       </div>
       ${(item.tags || []).length ? `<div class="community-tags">${item.tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
-      ${usageOpen ? `<div class="community-usage">
+      <div class="community-usage">
         <strong>${t('community.catalog.usageHeading')}</strong>
-        ${usage.length ? `<ul>${usage.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>` : `<div class="helper">${t('community.catalog.usageEmpty')}</div>`}
-      </div>` : ''}
+        ${usageLoading ? `<div class="helper">${t('community.catalog.loadingProfile')}</div>` : usage.length ? `<ul>${usage.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>` : `<div class="helper">${t('community.catalog.usageEmpty')}</div>`}
+      </div>
       <div class="actions community-profile-actions">
-        <button class="secondary" type="button" data-community-action="usage" data-profile-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}>${busy ? t('community.catalog.loadingProfile') : t(usageOpen ? 'community.catalog.hideUsage' : 'community.catalog.showUsage')}</button>
         <button class="secondary" type="button" data-community-action="download" data-profile-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}>${t('action.downloadCommunityProfile')}</button>
         <button class="primary" type="button" data-community-action="import" data-profile-id="${escapeHtml(item.id)}" ${busy ? 'disabled' : ''}>${busy ? t('community.catalog.loadingProfile') : t('action.importCommunityProfile')}</button>
       </div>
