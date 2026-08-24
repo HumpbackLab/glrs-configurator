@@ -2343,6 +2343,20 @@ function communityProfileSummary(profile) {
   };
 }
 
+function currentCommunityUsageProfile() {
+  return {
+    flight: {
+      mixer: flightConfigValue('fc_mixer', []),
+      mixerServos: flightConfigValue('fc_mixer_servos', []),
+      arm: {
+        enabled: Boolean(flightConfigValue('fc_arm_enabled', false)),
+        channel: flightConfigValue('fc_arm_channel', 5),
+      },
+      modeConditions: flightConfigValue('fc_mode_conditions', {}),
+    },
+  };
+}
+
 function communityUsageInstructions(profile) {
   const flight = profile?.flight;
   if (!flight) return [];
@@ -2379,9 +2393,17 @@ function communityUsageInstructions(profile) {
     switches.push(t('community.catalog.usageArm', {channel: flight.arm.channel}));
   }
   for (const mode of ['rate', 'angle']) {
-    const channel = flight.modeConditions?.[mode]?.[0];
+    const condition = flight.modeConditions?.[mode];
+    const channel = condition?.[0];
+    const start = condition?.[1];
+    const end = condition?.[2];
     if (Number.isInteger(Number(channel))) {
-      switches.push(t('community.catalog.usageSwitch', {channel, mode: mode.toUpperCase()}));
+      switches.push(t('community.catalog.usageSwitch', {
+        channel,
+        start: Number.isInteger(Number(start)) ? Number(start) : '',
+        end: Number.isInteger(Number(end)) ? Number(end) : '',
+        mode: mode.toUpperCase(),
+      }));
     }
   }
 
@@ -2900,6 +2922,20 @@ function renderModel() {
 }
 
 function renderPwm() {
+  if (state.beginnerMode) {
+    const usageProfile = currentCommunityUsageProfile();
+    const usage = communityUsageInstructions(usageProfile);
+    const hasMixer = Array.isArray(usageProfile.flight.mixer) && usageProfile.flight.mixer.length > 0;
+    return `
+      <section class="panel beginner-pwm-panel">
+        <h2>${t('pwm.heading')}</h2>
+        <div class="notice">${t('pwm.beginnerModeUnsupported')}</div>
+        <div class="community-usage beginner-pwm-usage">
+          <strong>${t('community.catalog.usageHeading')}</strong>
+          ${!hasMixer ? `<div class="helper">${t('pwm.beginnerModeNoMixer')}</div>` : usage.length ? `<ul>${usage.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>` : `<div class="helper">${t('community.catalog.usageEmpty')}</div>`}
+        </div>
+      </section>`;
+  }
   const entries = pwmEntries();
   const outputLimits = pwmOutputLimits();
   const runtimeValues = pwmOutputWifiValues();

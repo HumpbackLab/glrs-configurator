@@ -132,7 +132,7 @@
       "mixerPitch": "俯仰",
       "mixerYaw": "偏航",
       "usageArm": "CH{channel} 是解锁",
-      "usageSwitch": "CH{channel} 是 {mode}",
+      "usageSwitch": "CH{channel}（{start}-{end}us）是 {mode}",
       "usageEmpty": "此配置没有混控器或模式开关说明。",
       "replaceDraftConfirm": "当前有尚未保存的导入内容。继续将用社区配置覆盖这些表单草稿，是否继续？"
     }
@@ -161,6 +161,8 @@
   "pwm": {
     "heading": "PWM 输出",
     "headingShort": "PWM",
+    "beginnerModeUnsupported": "新手模式下不支持配置 PWM。",
+    "beginnerModeNoMixer": "当前没有混控器配置，请前往“状态 → 导入配置”，或者使用社区配置。",
     "noPwmNotice": "此目标未通过 <code>/config</code> 暴露 PWM 输出。",
     "offlineNotice": "未连接设备。当前为离线预览，连接接收机后才可保存。",
     "help": {

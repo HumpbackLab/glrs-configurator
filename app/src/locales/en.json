@@ -132,7 +132,7 @@
       "mixerPitch": "pitch",
       "mixerYaw": "yaw",
       "usageArm": "CH{channel} is ARM",
-      "usageSwitch": "CH{channel} is {mode}",
+      "usageSwitch": "CH{channel} ({start}-{end}us) is {mode}",
       "usageEmpty": "This profile has no mixer or mode-switch instructions.",
       "replaceDraftConfirm": "There are imported values that have not been saved. Continue and replace those form drafts with this community profile?"
     }
@@ -161,6 +161,8 @@
   "pwm": {
     "heading": "PWM Output",
     "headingShort": "PWM",
+    "beginnerModeUnsupported": "PWM configuration is not available in Beginner mode.",
+    "beginnerModeNoMixer": "No mixer configuration is available. Go to Status → Import Profile, or use a community profile.",
     "noPwmNotice": "This target does not expose PWM outputs through <code>/config</code>.",
     "offlineNotice": "Not connected to a device. This is an offline preview; connect a receiver before saving.",
     "help": {
