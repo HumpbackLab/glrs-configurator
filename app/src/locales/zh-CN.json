@@ -1,6 +1,8 @@
 {
   "app": {
-    "title": "Gyro ELRS 配置工具"
+    "title": "Gyro ELRS 配置工具",
+    "beginnerMode": "新手模式",
+    "beginnerModeHelp": "开启后，飞控页面只显示飞控安装方向校准"
   },
   "tab": {
     "status": "状态",

@@ -7,6 +7,7 @@ const DEFAULT_API = 'http://10.0.0.1';
 const API_STORAGE_KEY = 'elrs-local-rx-api';
 const LOCAL_PROXY_PATH = '/__elrs_proxy__';
 const UPDATE_SOURCE_STORAGE_KEY = 'elrs-app-update-source';
+const BEGINNER_MODE_STORAGE_KEY = 'elrs-beginner-mode';
 const PROFILE_FORMAT = 'gyro-elrs-profile';
 const PROFILE_VERSION = 1;
 const PROFILE_SUBMISSION_FORMAT = 'gyro-elrs-profile-submission';
@@ -15,6 +16,7 @@ const PROFILE_SUBMISSION_API = import.meta.env.VITE_PROFILE_SUBMISSION_URL
   || 'https://share.humpbacklab.com/api/submissions';
 const PROFILE_CATALOG_API = import.meta.env.VITE_PROFILE_CATALOG_URL
   || 'https://share.humpbacklab.com/catalog.json';
+const AIRCRAFT_MODEL_URL = `${import.meta.env.BASE_URL}models/model_rudderless_plane.gltf`;
 
 function defaultUpdateSource() {
   return getLocale() === 'zh-CN' ? 'gitee' : 'github';
@@ -23,6 +25,10 @@ function defaultUpdateSource() {
 function loadUpdateSource() {
   const stored = localStorage.getItem(UPDATE_SOURCE_STORAGE_KEY);
   return stored === 'gitee' || stored === 'github' ? stored : defaultUpdateSource();
+}
+
+function loadBeginnerMode() {
+  return localStorage.getItem(BEGINNER_MODE_STORAGE_KEY) === '1';
 }
 
 const state = {
@@ -41,6 +47,7 @@ const state = {
   uploadResult: null,
   uploadProgress: null,
   updateSource: loadUpdateSource(),
+  beginnerMode: loadBeginnerMode(),
   appUpdate: {
     status: 'idle',
     currentVersion: '',
@@ -975,6 +982,10 @@ async function saveFlight(event) {
     setMessage('error', state.profileImportError);
     return;
   }
+  if (state.beginnerMode) {
+    await saveBeginnerFlightOrientation();
+    return;
+  }
   const form = event.currentTarget;
   const nextConfig = {...config()};
   await runBusy(async () => {
@@ -1048,6 +1059,15 @@ async function saveFlight(event) {
     }
     markProfileSectionApplied('flight');
     state.extraMixerRows = 0;
+    await loadDevice();
+  }, t('message.flightSaved'));
+}
+
+async function saveBeginnerFlightOrientation() {
+  const nextConfig = {...config(), fc_orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4)};
+  await runBusy(async () => {
+    await apiFetch('/config', {method: 'POST', body: JSON.stringify(nextConfig)});
+    markProfileSectionApplied('flight');
     await loadDevice();
   }, t('message.flightSaved'));
 }
@@ -1811,7 +1831,7 @@ function initDebugAircraftView() {
   window.addEventListener('resize', view.resize);
 
   new GLTFLoader().load(
-    '/models/model_rudderless_plane.gltf',
+    AIRCRAFT_MODEL_URL,
     (gltf) => {
       if (debugAircraftView !== view) return;
       const loadedModel = gltf.scene;
@@ -1929,7 +1949,7 @@ function initOrientationAircraftView() {
   window.addEventListener('resize', view.resize);
 
   new GLTFLoader().load(
-    '/models/model_rudderless_plane.gltf',
+    AIRCRAFT_MODEL_URL,
     (gltf) => {
       if (orientationAircraftView !== view) return;
       const loadedModel = gltf.scene;
@@ -3083,6 +3103,11 @@ function round4(value) {
   return Math.round(value * 10000) / 10000;
 }
 
+function boardPreviewTransform(roll, pitch, yaw) {
+  // The board graphic's forward edge is the on-screen front arrow.
+  return `rotateZ(${-yaw}deg) rotateY(${roll}deg) rotateX(${pitch}deg)`;
+}
+
 function renderActivationRange(id, label, description, range, tone, disabled = false, channel = null, auxOptions = null) {
   const start = clamp(Number(range?.[0]) || 900, 900, 2075);
   const end = clamp(Number(range?.[1]) || 2100, start + 25, 2100);
@@ -3128,7 +3153,7 @@ function renderImuCalibration(angleEnabled) {
     </div>`;
   }).join('');
   return `
-    <div class="row">
+    <section class="imu-calibration-section">
       <label>${t('imuCalibration.heading')}</label>
       <div class="notice">${t('imuCalibration.safety')}</div>
       <div class="imu-calibration-grid">
@@ -3183,7 +3208,7 @@ function renderImuCalibration(angleEnabled) {
         </section>
       </div>
       <div class="helper">${t('imuCalibration.saveHelp')}</div>
-    </div>`;
+    </section>`;
 }
 
 function renderOrientationCalibration(installEuler) {
@@ -3231,8 +3256,20 @@ function renderOrientationCalibration(installEuler) {
       </div>
       <section class="orientation-results-card">
         <div class="orientation-results-heading"><strong>${t('orient.eulerResult')}</strong><span>${t('orient.resultReadOnly')}</span></div>
-        <div class="imu-cal-results orientation-results">
-          <div>${renderNumGrid('orientation-euler-result', [t('orient.installAngle')], [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], installEuler, {rowHeader: t('flight.axis'), disabled: true})}</div>
+        <div class="orientation-results-layout">
+          <div class="imu-cal-results orientation-results">
+            <div>${renderNumGrid('orientation-euler-result', [t('orient.installAngle')], [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], installEuler, {rowHeader: t('flight.axis'), disabled: true})}</div>
+          </div>
+          <div class="preview-scene orientation-board-preview" aria-label="${escapeHtml(t('flight.boardOrientation'))}">
+            <div class="preview-scene-inner">
+              <div class="preview-board" style="transform:${boardPreviewTransform(installEuler[0], installEuler[1], installEuler[2])}">
+                <div class="board-top">
+                  <div class="board-chip">▲</div>
+                  <div class="board-label">${escapeHtml(t('flight.boardLabel'))}</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="helper">${t('orient.saveHelp')}</div>
       </section>
@@ -3246,17 +3283,27 @@ function renderFlight() {
   const angleRateLimits = flightConfigValue('fc_angle_rate_limits_dps', [100, 100]);
   const dtermLpfHz = flightConfigValue('fc_dterm_lpf_hz', 20);
   const gyroLpfHz = flightConfigValue('fc_gyro_lpf_hz', 30);
-  const angleEnabled = Boolean(flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 1700]}).angle);
+  const angleEnabled = Boolean(flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 2100]}).angle);
   const mixer = flightConfigValue('fc_mixer', []);
   const mixerServos = flightConfigValue('fc_mixer_servos', []);
   const modeConditions = flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 1700]});
-  const wifiConditions = flightConfigValue('fc_wifi_conditions', {coexist: [7, 1700, 2100]});
+  const wifiConditions = flightConfigValue('fc_wifi_conditions', {});
   const armEnabled = flightConfigValue('fc_arm_enabled', false);
   const armChannel = flightConfigValue('fc_arm_channel', 5);
   const armRange = flightConfigValue('fc_arm_range', [1700, 2100]);
   const auxOptions = (selectedChannel) => pwmInputLabels.slice(4).map((label, index) => `<option value="${index + 5}" ${selected(selectedChannel, index + 5)}>${label}</option>`).join('');
   const matrix = orientationMatrixOrIdentity(state.orientationMatrix);
   const installEuler = installEulerFromOrientationMatrix(matrix);
+  if (state.beginnerMode) {
+    return `
+      <section class="panel beginner-flight-panel">
+        <h2>${t('flight.heading')}</h2>
+        <form id="flight-form">
+          ${renderOrientationCalibration(installEuler)}
+          <div class="actions"><button class="primary" ${state.busy || state.imuCalibration.busy || state.orientationCal.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot" ${state.busy || state.imuCalibration.busy || state.orientationCal.busy ? 'disabled' : ''}>${t('action.reboot')}</button></div>
+        </form>
+      </section>`;
+  }
   return `
     <section class="panel">
       <h2>${t('flight.heading')}</h2>
@@ -4099,6 +4146,10 @@ function render() {
     <div class="app">
       <header class="topbar">
         <div class="brand"><h1>${t('app.title')}</h1></div>
+        <label class="beginner-mode-toggle" title="${escapeHtml(t('app.beginnerModeHelp'))}">
+          <input type="checkbox" data-beginner-mode ${checked(state.beginnerMode)}>
+          <span>${t('app.beginnerMode')}</span>
+        </label>
         <div class="connection-status is-${state.connectionStatus}" title="${escapeHtml(apiBaseHost())}"><span></span><strong>${escapeHtml(connectionStatusLabel())}</strong></div>
         <select class="lang-switch" aria-label="${t('lang.label')}">
           <option value="zh-CN" ${selected(getLocale(), 'zh-CN')}>${t('lang.chinese')}</option>
@@ -4123,6 +4174,12 @@ function render() {
 }
 
 function wireEvents() {
+  document.querySelector('[data-beginner-mode]')?.addEventListener('change', (event) => {
+    state.beginnerMode = event.target.checked;
+    localStorage.setItem(BEGINNER_MODE_STORAGE_KEY, state.beginnerMode ? '1' : '0');
+    render();
+  });
+
   document.querySelector('.lang-switch')?.addEventListener('change', (event) => {
     setLocale(event.target.value);
     if (!localStorage.getItem(UPDATE_SOURCE_STORAGE_KEY)) state.updateSource = defaultUpdateSource();

@@ -65,6 +65,23 @@ button:disabled {
   margin-top: 3px;
 }
 
+.beginner-mode-toggle {
+  align-items: center;
+  color: #fff;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 12px;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.beginner-mode-toggle input {
+  accent-color: #34d399;
+  height: 16px;
+  margin: 0;
+  width: 16px;
+}
+
 .connection-status {
   align-items: center;
   display: grid;
@@ -890,6 +907,73 @@ button:disabled {
   width: 100%;
 }
 
+.preview-scene {
+  background:
+    linear-gradient(180deg, rgba(31, 122, 109, 0.08), rgba(23, 32, 51, 0.03)),
+    #f8fafc;
+  border: 1px solid #d8dee6;
+  border-radius: 8px;
+  flex: 1 1 auto;
+  min-height: 310px;
+  overflow: hidden;
+  perspective: 500px;
+  position: relative;
+  width: 100%;
+}
+
+.orientation-board-preview {
+  min-height: 150px;
+}
+
+.preview-scene-inner {
+  align-items: center;
+  display: flex;
+  height: 100%;
+  justify-content: center;
+  transform: rotateX(55deg) rotateZ(-25deg);
+  transform-style: preserve-3d;
+  width: 100%;
+}
+
+.preview-board {
+  height: 100px;
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 0.12s ease;
+  width: 150px;
+}
+
+.board-top {
+  align-items: center;
+  background: linear-gradient(135deg, #1a6b3c 0%, #115130 100%);
+  border: 2px solid #2ecc71;
+  border-radius: 6px;
+  box-shadow: 0 0 0 2px rgba(46, 204, 113, 0.15), 0 6px 20px rgba(0, 0, 0, 0.3);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  justify-content: center;
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 100%;
+}
+
+.board-chip {
+  font-size: 26px;
+  line-height: 1;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.board-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  margin-top: 2px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
 .orientation-pose-card > .helper { margin-top: 10px; }
 
 .orientation-results-card {
@@ -900,6 +984,35 @@ button:disabled {
 .orientation-results {
   grid-template-columns: minmax(0, 1fr);
   margin-top: 0;
+}
+
+.orientation-results-layout {
+  align-items: stretch;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+}
+
+.orientation-results-layout > * {
+  min-width: 0;
+}
+
+.orientation-results .grid-table {
+  table-layout: fixed;
+}
+
+.orientation-results .grid-table thead th,
+.orientation-results .grid-table tbody th {
+  overflow-wrap: anywhere;
+  padding-left: 3px;
+  padding-right: 3px;
+  white-space: normal;
+}
+
+.orientation-results .grid-table input {
+  font-size: 12px;
+  padding-left: 2px;
+  padding-right: 2px;
 }
 
 .debug-aircraft-panel {
@@ -1447,6 +1560,20 @@ button:disabled {
 }
 /* ---- IMU calibration ---- */
 
+.imu-calibration-section {
+  background: #fff;
+  border: 1px solid #d8e1e8;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.imu-calibration-section > label {
+  display: block;
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
 .imu-cal-card {
   background: linear-gradient(145deg, #fbfdff, #f4f7fa);
   border: 1px solid #d8e1e8;
@@ -1489,7 +1616,7 @@ button:disabled {
 .imu-calibration-grid {
   display: grid;
   gap: 14px;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .imu-step-hint {
@@ -1641,8 +1768,11 @@ button:disabled {
   .imu-calibration-grid,
   .imu-accel-results,
   .imu-cal-results,
-  .orientation-calibration-layout { grid-template-columns: 1fr; }
-  .orientation-aircraft-wrapper { min-height: 260px; }
+  .gyro-calibration-body,
+  .orientation-calibration-layout,
+  .orientation-results-layout { grid-template-columns: 1fr; }
+  .orientation-aircraft-wrapper,
+  .preview-scene { min-height: 260px; }
 }
 
 .gyro-bias-mode {
@@ -1655,19 +1785,22 @@ button:disabled {
 
 .gyro-calibration-body {
   display: grid;
-  gap: 10px;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   max-width: 680px;
 }
 
 .gyro-calibration-action {
-  align-items: center;
+  align-items: stretch;
   background: #fff;
   border: 1px dashed #cbd5df;
   border-radius: 7px;
   display: flex;
+  flex-direction: column;
   gap: 12px;
+  justify-content: center;
   min-height: 52px;
-  padding: 8px 10px;
+  padding: 12px;
 }
 
 .gyro-bias-mode legend {
@@ -1790,9 +1923,10 @@ button:disabled {
 }
 
 .gyro-calibration-action .actions {
-  flex: 0 0 auto;
-  margin: 0 0 0 auto;
+  margin: 0;
 }
+
+.gyro-calibration-action button { width: 100%; }
 
 @media (max-width: 800px) {
   .imu-face-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
