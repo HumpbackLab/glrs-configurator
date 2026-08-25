@@ -2158,6 +2158,36 @@ button:disabled {
 
 .flight-setting-card-body { padding: 16px; }
 
+.beginner-sensitivity-card {
+  background: #fff;
+  border: 1px solid #d8dee6;
+  border-radius: 8px;
+  margin: 14px 0;
+  overflow: hidden;
+}
+
+.beginner-sensitivity-header {
+  background: #f2f5f8;
+  border-bottom: 1px solid #d8dee6;
+  padding: 14px 16px;
+}
+
+.beginner-sensitivity-header h3 { color: #253044; font-size: 15px; margin: 0 0 4px; }
+.beginner-sensitivity-header p { color: #687386; font-size: 12px; line-height: 1.4; margin: 0; }
+
+.beginner-sensitivity-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 16px;
+}
+
+.beginner-sensitivity-field { display: grid; gap: 10px; }
+.beginner-sensitivity-label { align-items: center; display: flex; justify-content: space-between; gap: 8px; }
+.beginner-sensitivity-label strong { color: #253044; font-size: 13px; }
+.beginner-sensitivity-label output { color: #0f766e; font-size: 12px; white-space: nowrap; }
+.beginner-sensitivity-field input { accent-color: #1f7a6d; cursor: ew-resize; width: 100%; }
+
 .angle-rate-limit-grid {
   display: grid;
   gap: 16px;
@@ -2194,5 +2224,6 @@ button:disabled {
 
 @media (max-width: 620px) {
   .angle-rate-limit-grid { grid-template-columns: 1fr; }
+  .beginner-sensitivity-grid { grid-template-columns: 1fr; }
   .flight-setting-card-body { overflow-x: auto; padding: 12px; }
 }

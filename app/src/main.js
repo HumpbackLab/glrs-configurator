@@ -983,7 +983,7 @@ async function saveFlight(event) {
     return;
   }
   if (state.beginnerMode) {
-    await saveBeginnerFlightOrientation();
+    await saveBeginnerFlightOrientation(event.currentTarget);
     return;
   }
   const form = event.currentTarget;
@@ -1063,8 +1063,31 @@ async function saveFlight(event) {
   }, t('message.flightSaved'));
 }
 
-async function saveBeginnerFlightOrientation() {
-  const nextConfig = {...config(), fc_orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4)};
+function beginnerSensitivityLevel(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 5;
+  return Math.max(1, Math.min(10, Math.round(numeric / 0.2)));
+}
+
+function beginnerSensitivityGain(level) {
+  return Number((Math.max(1, Math.min(10, Number(level) || 5)) * 0.2).toFixed(1));
+}
+
+function readBeginnerRatePid(form) {
+  const ratePid = [...flightConfigValue('fc_rate_pid', Array(12).fill(0))];
+  [0, 1, 2].forEach((axis) => {
+    const level = intOrDefault(form.elements[`beginner-sensitivity-${axis}`]?.value, 5);
+    ratePid[axis * 4] = beginnerSensitivityGain(level);
+  });
+  return ratePid;
+}
+
+async function saveBeginnerFlightOrientation(form) {
+  const nextConfig = {
+    ...config(),
+    fc_orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4),
+    fc_rate_pid: readBeginnerRatePid(form),
+  };
   await runBusy(async () => {
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(nextConfig)});
     markProfileSectionApplied('flight');
@@ -3331,10 +3354,27 @@ function renderFlight() {
   const matrix = orientationMatrixOrIdentity(state.orientationMatrix);
   const installEuler = installEulerFromOrientationMatrix(matrix);
   if (state.beginnerMode) {
+    const sensitivityAxes = [
+      ['roll', t('flight.roll'), ratePid[0]],
+      ['pitch', t('flight.pitch'), ratePid[4]],
+      ['yaw', t('flight.yaw'), ratePid[8]],
+    ];
     return `
       <section class="panel beginner-flight-panel">
         <h2>${t('flight.heading')}</h2>
         <form id="flight-form">
+          <section class="beginner-sensitivity-card">
+            <div class="beginner-sensitivity-header"><h3>${t('flight.beginnerSensitivity')}</h3><p>${t('flight.beginnerSensitivityHelp')}</p></div>
+            <div class="beginner-sensitivity-grid">
+              ${sensitivityAxes.map(([axis, label, gain]) => {
+                const level = beginnerSensitivityLevel(gain);
+                return `<label class="beginner-sensitivity-field" for="beginner-sensitivity-${axis}">
+                  <span class="beginner-sensitivity-label"><strong>${label}</strong><output data-beginner-sensitivity-output="${axis}">${t('flight.beginnerSensitivityValue', {level, value: beginnerSensitivityGain(level).toFixed(1)})}</output></span>
+                  <input id="beginner-sensitivity-${axis}" name="beginner-sensitivity-${['roll', 'pitch', 'yaw'].indexOf(axis)}" data-beginner-sensitivity="${axis}" type="range" min="1" max="10" step="1" value="${level}">
+                </label>`;
+              }).join('')}
+            </div>
+          </section>
           ${renderOrientationCalibration(installEuler)}
           <div class="actions"><button class="primary" ${state.busy || state.imuCalibration.busy || state.orientationCal.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot" ${state.busy || state.imuCalibration.busy || state.orientationCal.busy ? 'disabled' : ''}>${t('action.reboot')}</button></div>
         </form>
@@ -4285,6 +4325,12 @@ function wireEvents() {
   document.querySelector('#model-form')?.addEventListener('submit', saveModel);
   document.querySelector('#pwm-form')?.addEventListener('submit', savePwm);
   document.querySelector('#flight-form')?.addEventListener('submit', saveFlight);
+  document.querySelectorAll('[data-beginner-sensitivity]').forEach((input) => {
+    input.addEventListener('input', () => {
+      const output = document.querySelector(`[data-beginner-sensitivity-output="${input.dataset.beginnerSensitivity}"]`);
+      if (output) output.textContent = t('flight.beginnerSensitivityValue', {level: input.value, value: beginnerSensitivityGain(input.value).toFixed(1)});
+    });
+  });
   document.querySelector('#hardware-form')?.addEventListener('submit', saveHardwareJson);
   document.querySelector('#wifi-form')?.addEventListener('submit', saveHomeNetwork);
   document.querySelector('#update-form')?.addEventListener('submit', uploadFirmware);
