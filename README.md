@@ -179,4 +179,4 @@ ELRS 接收机提供以下 HTTP 接口 (JSON 格式):
 
 ## 许可证
 
-与 ExpressLRS 项目保持一致。
+本项目依照 [GNU General Public License v3.0](LICENSE) 授权，SPDX 许可证标识符为 `GPL-3.0-only`。
