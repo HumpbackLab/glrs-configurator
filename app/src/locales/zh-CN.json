@@ -1,6 +1,7 @@
 {
   "app": {
     "title": "Gyro ELRS 配置工具",
+    "beginnerGuide": "新手引导",
     "beginnerMode": "新手模式",
     "beginnerModeHelp": "开启后，飞控页面只显示飞控安装方向校准"
   },
@@ -55,6 +56,15 @@
   "notice": {
     "working": "处理中...",
     "rateLoop": "MANUAL 绕过 PID，RATE 使用角速度环，ANGLE 使用角度外环和角速度内环。"
+  },
+  "beginnerGuide": {
+    "stepImport": "第一步：导入社区配置",
+    "stepImportHelp": "请选择一个包含飞控配置的社区配置。导入后继续采集飞控安装角度。",
+    "stepOrientation": "第二步：采集飞控安装角度",
+    "stepOrientationHelp": "按照下方提示放置飞控并完成两次采集，完成后会自动开启新手模式。",
+    "cancel": "退出引导",
+    "complete": "引导完成，已开启新手模式；后续可在飞控页面调整感度。",
+    "flightRequired": "该社区配置不包含飞控配置，请选择包含飞控配置的社区配置。"
   },
   "status": {
     "device": "设备",
@@ -219,7 +229,7 @@
     "ratePid": "Rate PID",
     "ratePidHelp": "RATE 与 ANGLE 模式共用的角速度内环控制参数。",
     "beginnerSensitivity": "感度（反馈强度）",
-    "beginnerSensitivityHelp": "调节三轴角速度环反馈强度，范围为1–10级，默认5级。",
+    "beginnerSensitivityHelp": "以当前配置的默认感度为基准调节三轴反馈强度，范围为0.2倍到2倍，默认5级。",
     "beginnerSensitivityValue": "{level}级",
     "angleRateLimits": "ANGLE 角速度限制",
     "angleRateLimitsHelp": "限制角度外环输出给角速度内环的 Roll/Pitch 目标角速度；每轴默认 100°/s。",
@@ -314,6 +324,7 @@
     "source": "更新源",
     "sourceGitee": "Gitee（国内推荐）",
     "sourceGithub": "GitHub",
+    "sourceBeta": "Beta 测试版",
     "downloading": "正在下载并验证更新",
     "status": {
       "idle": "尚未检查应用更新",

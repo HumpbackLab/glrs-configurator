@@ -286,6 +286,8 @@ mod app_updates {
         "https://github.com/HumpbackLab/glrs-configurator/releases/latest/download/latest.json";
     const GITEE_ENDPOINT: &str =
         "https://raw.giteeusercontent.com/ncer/glrs-configurator/raw/master/updater/latest.json";
+    const BETA_ENDPOINT: &str =
+        "https://github.com/HumpbackLab/glrs-configurator/releases/download/beta/latest.json";
 
     pub struct PendingUpdate(pub Mutex<Option<Update>>);
 
@@ -321,6 +323,7 @@ mod app_updates {
         match source {
             "gitee" => Ok(GITEE_ENDPOINT),
             "github" => Ok(GITHUB_ENDPOINT),
+            "beta" => Ok(BETA_ENDPOINT),
             _ => Err(format!("unknown update source: {source}")),
         }
     }
@@ -402,10 +405,14 @@ mod android_app_updates {
         "https://github.com/HumpbackLab/glrs-configurator/releases/latest/download/android-latest.json";
     const GITEE_ENDPOINT: &str =
         "https://raw.giteeusercontent.com/ncer/glrs-configurator/raw/master/updater/android-latest.json";
+    const BETA_ENDPOINT: &str =
+        "https://github.com/HumpbackLab/glrs-configurator/releases/download/beta/android-latest.json";
     const GITHUB_DOWNLOAD_PREFIX: &str =
         "https://github.com/HumpbackLab/glrs-configurator/releases/download/";
     const GITEE_DOWNLOAD_PREFIX: &str =
         "https://gitee.com/ncer/glrs-configurator/releases/download/";
+    const BETA_DOWNLOAD_PREFIX: &str =
+        "https://github.com/HumpbackLab/glrs-configurator/releases/download/";
     const MAX_MANIFEST_SIZE: u64 = 1024 * 1024;
     const MAX_APK_SIZE: u64 = 100 * 1024 * 1024;
 
@@ -481,6 +488,7 @@ mod android_app_updates {
         match source {
             "gitee" => Ok(GITEE_ENDPOINT),
             "github" => Ok(GITHUB_ENDPOINT),
+            "beta" => Ok(BETA_ENDPOINT),
             _ => Err(format!("unknown update source: {source}")),
         }
     }
@@ -490,6 +498,7 @@ mod android_app_updates {
         let prefix = match source {
             "gitee" => GITEE_DOWNLOAD_PREFIX,
             "github" => GITHUB_DOWNLOAD_PREFIX,
+            "beta" => BETA_DOWNLOAD_PREFIX,
             _ => return Err(format!("unknown update source: {source}")),
         };
         if !url.as_str().starts_with(prefix) {
@@ -688,9 +697,12 @@ mod firmware_updates {
         "https://github.com/HumpbackLab/Gyro-ELRS/releases/latest/download/firmware-latest.json";
     const GITEE_MANIFEST: &str =
         "https://raw.giteeusercontent.com/ncer/Gyro-ELRS/raw/elrs_fc/updater/firmware-latest.json";
+    const BETA_MANIFEST: &str =
+        "https://github.com/HumpbackLab/Gyro-ELRS/releases/download/beta/firmware-latest.json";
     const GITHUB_DOWNLOAD_PREFIX: &str =
         "https://github.com/HumpbackLab/Gyro-ELRS/releases/download/";
     const GITEE_DOWNLOAD_PREFIX: &str = "https://gitee.com/ncer/Gyro-ELRS/releases/download/";
+    const BETA_DOWNLOAD_PREFIX: &str = "https://github.com/HumpbackLab/Gyro-ELRS/releases/download/";
     const GITHUB_RELEASE_API: &str =
         "https://api.github.com/repos/HumpbackLab/Gyro-ELRS/releases/tags/";
     const GITEE_RELEASE_API: &str = "https://gitee.com/api/v5/repos/ncer/Gyro-ELRS/releases/tags/";
@@ -726,6 +738,8 @@ mod firmware_updates {
     struct FirmwareSources {
         github: String,
         gitee: String,
+        #[serde(default)]
+        beta: String,
     }
 
     #[derive(Deserialize)]
@@ -859,6 +873,7 @@ mod firmware_updates {
         match source {
             "github" => Ok(GITHUB_MANIFEST),
             "gitee" => Ok(GITEE_MANIFEST),
+            "beta" => Ok(BETA_MANIFEST),
             _ => Err(format!("unknown firmware source: {source}")),
         }
     }
@@ -902,6 +917,7 @@ mod firmware_updates {
         let (url, prefix) = match source {
             "github" => (&entry.sources.github, GITHUB_DOWNLOAD_PREFIX),
             "gitee" => (&entry.sources.gitee, GITEE_DOWNLOAD_PREFIX),
+            "beta" => (&entry.sources.beta, BETA_DOWNLOAD_PREFIX),
             _ => return Err(format!("unknown firmware source: {source}")),
         };
         if !url.starts_with(prefix) {
@@ -961,8 +977,18 @@ mod firmware_updates {
                 sources: FirmwareSources {
                     github: "https://github.com/HumpbackLab/Gyro-ELRS/releases/download/v0.9.1_e364/LightFin.Nano.2.4GHz.RX_v0.9.1_e364.bin".into(),
                     gitee: gitee_url.into(),
+                    beta: String::new(),
                 },
             }
+        }
+
+        #[test]
+        fn accepts_beta_release_download_url() {
+            let beta_url = "https://github.com/HumpbackLab/Gyro-ELRS/releases/download/beta/actual-firmware.bin";
+            let mut entry = firmware_entry("");
+            entry.sources.beta = beta_url.into();
+
+            assert_eq!(download_url(&entry, "beta").unwrap(), beta_url);
         }
 
         #[test]
