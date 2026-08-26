@@ -231,6 +231,7 @@
     "beginnerSensitivity": "感度（反馈强度）",
     "beginnerSensitivityHelp": "调节三轴反馈强度，范围为通用基准的0.5倍到2倍，5级为1倍。",
     "beginnerSensitivityValue": "{level}级",
+    "beginnerReverseFeedback": "反向反馈",
     "angleRateLimits": "ANGLE 角速度限制",
     "angleRateLimitsHelp": "限制角度外环输出给角速度内环的 Roll/Pitch 目标角速度；每轴默认 100°/s。",
     "angleRateLimit": "最大角速度",

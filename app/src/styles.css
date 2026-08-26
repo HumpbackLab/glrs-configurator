@@ -2211,10 +2211,14 @@ button:disabled {
 }
 
 .beginner-sensitivity-field { display: grid; gap: 10px; }
+.beginner-sensitivity-control { display: grid; gap: 10px; }
 .beginner-sensitivity-label { align-items: center; display: flex; justify-content: space-between; gap: 8px; }
 .beginner-sensitivity-label strong { color: #253044; font-size: 13px; }
 .beginner-sensitivity-label output { color: #0f766e; font-size: 12px; white-space: nowrap; }
-.beginner-sensitivity-field input { accent-color: #1f7a6d; cursor: ew-resize; width: 100%; }
+.beginner-sensitivity-field input { accent-color: #1f7a6d; }
+.beginner-sensitivity-field input[type="range"] { cursor: ew-resize; width: 100%; }
+.beginner-reverse-feedback { align-items: center; color: #4b5563; cursor: pointer; display: flex; font-size: 12px; gap: 7px; width: fit-content; }
+.beginner-reverse-feedback input { cursor: pointer; margin: 0; }
 
 .angle-rate-limit-grid {
   display: grid;

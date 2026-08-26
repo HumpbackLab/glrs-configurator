@@ -1073,8 +1073,8 @@ async function saveFlight(event) {
 function beginnerSensitivityLevel(value, baseValue = BEGINNER_RATE_PID_BASE[0]) {
   const numeric = Number(value);
   const base = Number(baseValue);
-  if (!Number.isFinite(numeric) || numeric <= 0 || !Number.isFinite(base) || base <= 0) return 5;
-  const gain = numeric / base;
+  if (!Number.isFinite(numeric) || numeric === 0 || !Number.isFinite(base) || base <= 0) return 5;
+  const gain = Math.abs(numeric) / base;
   let closestIndex = 0;
   BEGINNER_SENSITIVITY_GAINS.forEach((candidate, index) => {
     if (Math.abs(candidate - gain) < Math.abs(BEGINNER_SENSITIVITY_GAINS[closestIndex] - gain)) closestIndex = index;
@@ -1087,27 +1087,31 @@ function beginnerSensitivityGain(level) {
   return BEGINNER_SENSITIVITY_GAINS[index];
 }
 
-function beginnerRatePidFromLevels(levels) {
+function beginnerRatePidFromLevels(levels, reversed = []) {
   const ratePid = [...BEGINNER_RATE_PID_BASE];
   [0, 1, 2].forEach((axis) => {
     const gain = beginnerSensitivityGain(levels[axis]);
+    const sign = reversed[axis] ? -1 : 1;
     const offset = axis * 4;
-    ratePid[offset] = Number((BEGINNER_RATE_PID_BASE[offset] * gain).toFixed(2));
-    ratePid[offset + 1] = Number((BEGINNER_RATE_PID_BASE[offset + 1] * gain).toFixed(2));
-    ratePid[offset + 2] = Number((BEGINNER_RATE_PID_BASE[offset + 2] * gain).toFixed(2));
+    ratePid[offset] = Number((BEGINNER_RATE_PID_BASE[offset] * gain * sign).toFixed(2));
+    ratePid[offset + 1] = Number((BEGINNER_RATE_PID_BASE[offset + 1] * gain * sign).toFixed(2));
+    ratePid[offset + 2] = Number((BEGINNER_RATE_PID_BASE[offset + 2] * gain * sign).toFixed(2));
   });
   return ratePid;
 }
 
 function beginnerRatePidFromImportedRatePid(ratePid) {
   const levels = [0, 1, 2].map((axis) => beginnerSensitivityLevel(ratePid?.[axis * 4]));
-  return beginnerRatePidFromLevels(levels);
+  const reversed = [0, 1, 2].map((axis) => Number(ratePid?.[axis * 4]) < 0);
+  return beginnerRatePidFromLevels(levels, reversed);
 }
 
 function readBeginnerRatePid(form) {
   const levels = [0, 1, 2].map((axis) =>
     intOrDefault(form.elements[`beginner-sensitivity-${axis}`]?.value, 5));
-  return beginnerRatePidFromLevels(levels);
+  const reversed = [0, 1, 2].map((axis) =>
+    Boolean(form.elements[`beginner-reverse-feedback-${axis}`]?.checked));
+  return beginnerRatePidFromLevels(levels, reversed);
 }
 
 function startBeginnerGuide() {
@@ -3463,10 +3467,14 @@ function renderFlight() {
             <div class="beginner-sensitivity-grid">
               ${sensitivityAxes.map(([axis, label, gain]) => {
                 const level = beginnerSensitivityLevel(gain);
-                return `<label class="beginner-sensitivity-field" for="beginner-sensitivity-${axis}">
-                  <span class="beginner-sensitivity-label"><strong>${label}</strong><output data-beginner-sensitivity-output="${axis}">${t('flight.beginnerSensitivityValue', {level})}</output></span>
-                  <input id="beginner-sensitivity-${axis}" name="beginner-sensitivity-${['roll', 'pitch', 'yaw'].indexOf(axis)}" data-beginner-sensitivity="${axis}" type="range" min="1" max="10" step="1" value="${level}">
-                </label>`;
+                const axisIndex = ['roll', 'pitch', 'yaw'].indexOf(axis);
+                return `<div class="beginner-sensitivity-field">
+                  <label class="beginner-sensitivity-control" for="beginner-sensitivity-${axis}">
+                    <span class="beginner-sensitivity-label"><strong>${label}</strong><output data-beginner-sensitivity-output="${axis}">${t('flight.beginnerSensitivityValue', {level})}</output></span>
+                    <input id="beginner-sensitivity-${axis}" name="beginner-sensitivity-${axisIndex}" data-beginner-sensitivity="${axis}" type="range" min="1" max="10" step="1" value="${level}">
+                  </label>
+                  <label class="beginner-reverse-feedback"><input name="beginner-reverse-feedback-${axisIndex}" type="checkbox" ${checked(Number(gain) < 0)}><span>${t('flight.beginnerReverseFeedback')}</span></label>
+                </div>`;
               }).join('')}
             </div>
           </section>
