@@ -82,6 +82,34 @@ button:disabled {
   width: 16px;
 }
 
+.beginner-guide-button { white-space: nowrap; }
+
+.beginner-guide-banner {
+  align-items: center;
+  background: #ecfdf5;
+  border: 1px solid #99d7c4;
+  border-radius: 8px;
+  color: #155e56;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 12px 0;
+  padding: 12px 14px;
+}
+
+.beginner-guide-banner strong { font-size: 13px; }
+.beginner-guide-banner span { flex: 1 1 260px; font-size: 12px; line-height: 1.45; }
+.beginner-guide-banner button { min-height: 30px; }
+.flight-guide-banner { margin: 0 0 14px; }
+
+.beginner-guide-dialog {
+  max-width: 1100px;
+}
+
+.beginner-guide-dialog .orientation-editor {
+  margin-top: 0;
+}
+
 .connection-status {
   align-items: center;
   display: grid;

@@ -1,6 +1,7 @@
 {
   "app": {
     "title": "Gyro ELRS Configurator",
+    "beginnerGuide": "Beginner guide",
     "beginnerMode": "Beginner mode",
     "beginnerModeHelp": "Show only board orientation calibration on the Flight page"
   },
@@ -55,6 +56,15 @@
   "notice": {
     "working": "Working...",
     "rateLoop": "MANUAL bypasses PID, RATE uses the rate loop, and ANGLE uses both angle and rate loops."
+  },
+  "beginnerGuide": {
+    "stepImport": "Step 1: Import a community profile",
+    "stepImportHelp": "Choose a community profile that includes flight-control settings. After importing, continue with board orientation calibration.",
+    "stepOrientation": "Step 2: Calibrate board orientation",
+    "stepOrientationHelp": "Place the flight controller as instructed and complete both captures. Beginner mode will be enabled automatically when finished.",
+    "cancel": "Exit guide",
+    "complete": "Guide complete. Beginner mode is enabled; you can adjust sensitivity later on the Flight page.",
+    "flightRequired": "This community profile does not include flight-control settings. Choose one that includes them."
   },
   "status": {
     "device": "Device",
@@ -219,7 +229,7 @@
     "ratePid": "Rate PID",
     "ratePidHelp": "Inner-loop angular-rate control for RATE and ANGLE modes.",
     "beginnerSensitivity": "Sensitivity (feedback strength)",
-    "beginnerSensitivityHelp": "Adjust three-axis angular-rate feedback from level 1 to 10. The default is level 5.",
+    "beginnerSensitivityHelp": "Adjust three-axis feedback from 0.2x to 2x of the current default sensitivity. The default is level 5.",
     "beginnerSensitivityValue": "Level {level}",
     "angleRateLimits": "ANGLE Rate Limits",
     "angleRateLimitsHelp": "Limits the Roll and Pitch angular-rate targets produced by the outer angle loop. Default: 100°/s per axis.",
@@ -314,6 +324,7 @@
     "source": "Update source",
     "sourceGitee": "Gitee (China mirror)",
     "sourceGithub": "GitHub",
+    "sourceBeta": "Beta",
     "downloading": "Downloading and verifying update",
     "status": {
       "idle": "App updates have not been checked yet",

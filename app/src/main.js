@@ -8,6 +8,7 @@ const API_STORAGE_KEY = 'elrs-local-rx-api';
 const LOCAL_PROXY_PATH = '/__elrs_proxy__';
 const UPDATE_SOURCE_STORAGE_KEY = 'elrs-app-update-source';
 const BEGINNER_MODE_STORAGE_KEY = 'elrs-beginner-mode';
+const BEGINNER_SENSITIVITY_BASE_STORAGE_KEY = 'elrs-beginner-sensitivity-base';
 const PROFILE_FORMAT = 'gyro-elrs-profile';
 const PROFILE_VERSION = 1;
 const PROFILE_SUBMISSION_FORMAT = 'gyro-elrs-profile-submission';
@@ -24,7 +25,7 @@ function defaultUpdateSource() {
 
 function loadUpdateSource() {
   const stored = localStorage.getItem(UPDATE_SOURCE_STORAGE_KEY);
-  return stored === 'gitee' || stored === 'github' ? stored : defaultUpdateSource();
+  return ['gitee', 'github', 'beta'].includes(stored) ? stored : defaultUpdateSource();
 }
 
 function loadBeginnerMode() {
@@ -48,6 +49,8 @@ const state = {
   uploadProgress: null,
   updateSource: loadUpdateSource(),
   beginnerMode: loadBeginnerMode(),
+  beginnerSensitivityBase: null,
+  beginnerGuide: {active: false, step: 0},
   appUpdate: {
     status: 'idle',
     currentVersion: '',
@@ -1063,10 +1066,42 @@ async function saveFlight(event) {
   }, t('message.flightSaved'));
 }
 
-function beginnerSensitivityLevel(value) {
+function beginnerSensitivityBaseValues(ratePid) {
+  return [0, 4, 8].map((index) => {
+    const value = Number(ratePid?.[index]);
+    return Number.isFinite(value) && value > 0 ? value : 1;
+  });
+}
+
+function setBeginnerSensitivityBase(ratePid) {
+  const values = beginnerSensitivityBaseValues(ratePid);
+  state.beginnerSensitivityBase = values;
+  localStorage.setItem(BEGINNER_SENSITIVITY_BASE_STORAGE_KEY, JSON.stringify({
+    target: state.target?.target || '',
+    values,
+  }));
+  return values;
+}
+
+function beginnerSensitivityBase(ratePid) {
+  if (Array.isArray(state.beginnerSensitivityBase)) return state.beginnerSensitivityBase;
+  try {
+    const stored = JSON.parse(localStorage.getItem(BEGINNER_SENSITIVITY_BASE_STORAGE_KEY) || 'null');
+    if (stored?.target === (state.target?.target || '') && Array.isArray(stored.values) && stored.values.length === 3) {
+      state.beginnerSensitivityBase = beginnerSensitivityBaseValues(stored.values);
+      return state.beginnerSensitivityBase;
+    }
+  } catch {
+    // Ignore malformed local storage and use the current configuration.
+  }
+  return setBeginnerSensitivityBase(ratePid);
+}
+
+function beginnerSensitivityLevel(value, baseValue) {
   const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric <= 0) return 5;
-  return Math.max(1, Math.min(10, Math.round(numeric / 0.2)));
+  const base = Number(baseValue);
+  if (!Number.isFinite(numeric) || numeric <= 0 || !Number.isFinite(base) || base <= 0) return 5;
+  return Math.max(1, Math.min(10, Math.round((numeric / base) / 0.2)));
 }
 
 function beginnerSensitivityGain(level) {
@@ -1075,11 +1110,63 @@ function beginnerSensitivityGain(level) {
 
 function readBeginnerRatePid(form) {
   const ratePid = [...flightConfigValue('fc_rate_pid', Array(12).fill(0))];
+  const baseValues = beginnerSensitivityBase(ratePid);
   [0, 1, 2].forEach((axis) => {
     const level = intOrDefault(form.elements[`beginner-sensitivity-${axis}`]?.value, 5);
-    ratePid[axis * 4] = beginnerSensitivityGain(level);
+    ratePid[axis * 4] = Number((baseValues[axis] * beginnerSensitivityGain(level)).toFixed(2));
   });
   return ratePid;
+}
+
+function startBeginnerGuide() {
+  if (state.busy) return;
+  state.beginnerMode = false;
+  localStorage.setItem(BEGINNER_MODE_STORAGE_KEY, '0');
+  state.beginnerGuide = {active: true, step: 1};
+  state.tab = 'status';
+  state.message = null;
+  openCommunityCatalog();
+}
+
+function cancelBeginnerGuide() {
+  state.beginnerGuide = {active: false, step: 0};
+  state.beginnerMode = false;
+  localStorage.setItem(BEGINNER_MODE_STORAGE_KEY, '0');
+  state.communityCatalog.open = false;
+  state.message = null;
+  render();
+}
+
+function beginnerGuideConfig() {
+  const flight = state.profileDraft?.flight;
+  if (!flight) throw new Error(t('beginnerGuide.flightRequired'));
+  const payload = {
+    ...config(),
+    ...flight,
+    fc_orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4),
+  };
+  delete payload.fc_mixer_count;
+  if (state.profileDraft?.pwm) {
+    payload.pwm = state.profileDraft.pwm;
+    payload.fc_pwm_output_limits = state.profileDraft.pwmLimits;
+    payload['serial1-protocol'] = state.profileDraft.serial1Protocol;
+  }
+  return payload;
+}
+
+async function completeBeginnerGuide() {
+  await runBusy(async () => {
+    await apiFetch('/config', {method: 'POST', body: JSON.stringify(beginnerGuideConfig())});
+    state.profileDraft = null;
+    state.profileOriginal = null;
+    state.profileCompatibility = null;
+    state.profileImportError = '';
+    await loadDevice();
+    state.beginnerMode = true;
+    localStorage.setItem(BEGINNER_MODE_STORAGE_KEY, '1');
+    state.beginnerGuide = {active: false, step: 0};
+    state.tab = 'status';
+  }, t('beginnerGuide.complete'));
 }
 
 async function saveBeginnerFlightOrientation(form) {
@@ -1410,10 +1497,14 @@ async function captureOrientationFace() {
       const result = calculateOrientationMatrix(state.orientationCal.samples);
       state.orientationMatrix = result.matrix;
       state.orientationCal.levelCorrectionDeg = result.levelCorrectionDeg;
-      setMessage('ok', t('orient.complete', {
-        roll: result.levelCorrectionDeg[0].toFixed(1),
-        pitch: result.levelCorrectionDeg[1].toFixed(1),
-      }));
+      if (state.beginnerGuide.active && state.beginnerGuide.step === 2) {
+        await completeBeginnerGuide();
+      } else {
+        setMessage('ok', t('orient.complete', {
+          roll: result.levelCorrectionDeg[0].toFixed(1),
+          pitch: result.levelCorrectionDeg[1].toFixed(1),
+        }));
+      }
     } else {
       setMessage('ok', t('orient.topCaptured'));
     }
@@ -2682,6 +2773,9 @@ async function handleCommunityProfileAction(action, id) {
   render();
   try {
     const profile = await fetchCommunityProfile(item);
+    if (action === 'import' && state.beginnerGuide.active && !profile.flight) {
+      throw new Error(t('beginnerGuide.flightRequired'));
+    }
     if (action === 'usage') {
       state.communityCatalog.usageById[id] = profile;
       state.communityCatalog.usageProfileId = id;
@@ -2704,6 +2798,13 @@ async function handleCommunityProfileAction(action, id) {
     }
     state.communityCatalog.open = false;
     state.communityCatalog.busyId = '';
+    if (state.beginnerGuide.active) {
+      state.beginnerGuide.step = 2;
+      state.tab = 'status';
+      state.beginnerMode = true;
+      setBeginnerSensitivityBase(profile.flight.ratePid);
+      localStorage.setItem(BEGINNER_MODE_STORAGE_KEY, '1');
+    }
     applyImportedProfile(profile);
   } catch (error) {
     state.communityCatalog.busyId = '';
@@ -2730,6 +2831,7 @@ function renderCommunityCatalog() {
         <div><h2 id="community-catalog-title">${t('community.catalog.heading')}</h2><div class="helper">${t('community.catalog.description')}</div></div>
         <button class="icon-button" type="button" data-action="community-catalog-close" aria-label="${t('action.cancel')}">×</button>
       </div>
+      ${state.beginnerGuide.active && state.beginnerGuide.step === 1 ? `<div class="beginner-guide-banner"><strong>${t('beginnerGuide.stepImport')}</strong><span>${t('beginnerGuide.stepImportHelp')}</span><button class="secondary" type="button" data-action="beginner-guide-cancel">${t('beginnerGuide.cancel')}</button></div>` : ''}
       ${state.communityCatalog.error ? `<div class="message error">${escapeHtml(state.communityCatalog.error)}</div>` : ''}
       ${loading ? `<div class="community-catalog-loading">${t('community.catalog.loading')}</div>` : ''}
       ${state.communityCatalog.status === 'error' ? `<div class="actions"><button class="primary" type="button" data-action="community-catalog-refresh">${t('community.catalog.retry')}</button></div>` : ''}
@@ -3354,22 +3456,24 @@ function renderFlight() {
   const matrix = orientationMatrixOrIdentity(state.orientationMatrix);
   const installEuler = installEulerFromOrientationMatrix(matrix);
   if (state.beginnerMode) {
+    const sensitivityBase = beginnerSensitivityBase(ratePid);
     const sensitivityAxes = [
-      ['roll', t('flight.roll'), ratePid[0]],
-      ['pitch', t('flight.pitch'), ratePid[4]],
-      ['yaw', t('flight.yaw'), ratePid[8]],
+      ['roll', t('flight.roll'), ratePid[0], sensitivityBase[0]],
+      ['pitch', t('flight.pitch'), ratePid[4], sensitivityBase[1]],
+      ['yaw', t('flight.yaw'), ratePid[8], sensitivityBase[2]],
     ];
     return `
       <section class="panel beginner-flight-panel">
         <h2>${t('flight.heading')}</h2>
         <form id="flight-form">
+          ${state.beginnerGuide.active && state.beginnerGuide.step === 2 ? `<div class="beginner-guide-banner flight-guide-banner"><strong>${t('beginnerGuide.stepOrientation')}</strong><span>${t('beginnerGuide.stepOrientationHelp')}</span><button class="secondary" type="button" data-action="beginner-guide-cancel">${t('beginnerGuide.cancel')}</button></div>` : ''}
           <section class="beginner-sensitivity-card">
             <div class="beginner-sensitivity-header"><h3>${t('flight.beginnerSensitivity')}</h3><p>${t('flight.beginnerSensitivityHelp')}</p></div>
             <div class="beginner-sensitivity-grid">
-              ${sensitivityAxes.map(([axis, label, gain]) => {
-                const level = beginnerSensitivityLevel(gain);
+              ${sensitivityAxes.map(([axis, label, gain, base]) => {
+                const level = beginnerSensitivityLevel(gain, base);
                 return `<label class="beginner-sensitivity-field" for="beginner-sensitivity-${axis}">
-                  <span class="beginner-sensitivity-label"><strong>${label}</strong><output data-beginner-sensitivity-output="${axis}">${t('flight.beginnerSensitivityValue', {level, value: beginnerSensitivityGain(level).toFixed(1)})}</output></span>
+                  <span class="beginner-sensitivity-label"><strong>${label}</strong><output data-beginner-sensitivity-output="${axis}">${t('flight.beginnerSensitivityValue', {level})}</output></span>
                   <input id="beginner-sensitivity-${axis}" name="beginner-sensitivity-${['roll', 'pitch', 'yaw'].indexOf(axis)}" data-beginner-sensitivity="${axis}" type="range" min="1" max="10" step="1" value="${level}">
                 </label>`;
               }).join('')}
@@ -3385,6 +3489,7 @@ function renderFlight() {
       <h2>${t('flight.heading')}</h2>
       ${state.profileDraft?.flight ? `<div class="notice profile-unsaved">${t('profile.flightUnsaved')}</div>` : ''}
       <form id="flight-form">
+        ${state.beginnerGuide.active && state.beginnerGuide.step === 2 ? `<div class="beginner-guide-banner flight-guide-banner"><strong>${t('beginnerGuide.stepOrientation')}</strong><span>${t('beginnerGuide.stepOrientationHelp')}</span><button class="secondary" type="button" data-action="beginner-guide-cancel">${t('beginnerGuide.cancel')}</button></div>` : ''}
         <div class="mode-config">
           <div class="mode-config-header">
             <div><h3>${t('flight.modeRanges')}</h3><div class="helper">${t('flight.rangeHelp')}</div></div>
@@ -3882,6 +3987,7 @@ function renderUpdate() {
           <select id="app-update-source" ${['checking', 'downloading', 'permission', 'installing', 'installed'].includes(appUpdate.status) ? 'disabled' : ''}>
             <option value="gitee" ${state.updateSource === 'gitee' ? 'selected' : ''}>${t('appUpdate.sourceGitee')}</option>
             <option value="github" ${state.updateSource === 'github' ? 'selected' : ''}>${t('appUpdate.sourceGithub')}</option>
+            <option value="beta" ${state.updateSource === 'beta' ? 'selected' : ''}>${t('appUpdate.sourceBeta')}</option>
           </select>
         </div>
         <div class="notice app-update-status">${escapeHtml(appStatus)}</div>
@@ -3901,6 +4007,7 @@ function renderUpdate() {
           <select id="firmware-update-source" ${['checking', 'downloading'].includes(firmwareUpdate.status) ? 'disabled' : ''}>
             <option value="gitee" ${state.updateSource === 'gitee' ? 'selected' : ''}>${t('appUpdate.sourceGitee')}</option>
             <option value="github" ${state.updateSource === 'github' ? 'selected' : ''}>${t('appUpdate.sourceGithub')}</option>
+            <option value="beta" ${state.updateSource === 'beta' ? 'selected' : ''}>${t('appUpdate.sourceBeta')}</option>
           </select>
         </div>
         <div class="notice app-update-status">${escapeHtml(firmwareStatus)}</div>
@@ -3938,6 +4045,20 @@ function renderCurrentTab() {
     wifi: renderWifi,
     update: renderUpdate,
   }[state.tab]();
+}
+
+function renderBeginnerGuide() {
+  if (!state.beginnerGuide.active || state.beginnerGuide.step !== 2) return '';
+  const matrix = orientationMatrixOrIdentity(state.orientationMatrix);
+  return `<div class="submission-modal beginner-guide-modal" role="dialog" aria-modal="true" aria-labelledby="beginner-guide-title">
+    <section class="submission-dialog beginner-guide-dialog">
+      <div class="submission-dialog-heading">
+        <div><h2 id="beginner-guide-title">${t('beginnerGuide.stepOrientation')}</h2><div class="helper">${t('beginnerGuide.stepOrientationHelp')}</div></div>
+        <button class="icon-button" type="button" data-action="beginner-guide-cancel" aria-label="${t('beginnerGuide.cancel')}">×</button>
+      </div>
+      ${renderOrientationCalibration(installEulerFromOrientationMatrix(matrix))}
+    </section>
+  </div>`;
 }
 
 function wirePwmForm() {
@@ -4222,6 +4343,7 @@ function render() {
     <div class="app">
       <header class="topbar">
         <div class="brand"><h1>${t('app.title')}</h1></div>
+        <button class="secondary beginner-guide-button" type="button" data-action="beginner-guide-start" ${state.busy ? 'disabled' : ''}>${t('app.beginnerGuide')}</button>
         <label class="beginner-mode-toggle" title="${escapeHtml(t('app.beginnerModeHelp'))}">
           <input type="checkbox" data-beginner-mode ${checked(state.beginnerMode)}>
           <span>${t('app.beginnerMode')}</span>
@@ -4245,12 +4367,14 @@ function render() {
           ${renderCurrentTab()}
         </main>
       </div>
+      ${renderBeginnerGuide()}
     </div>`;
   wireEvents();
 }
 
 function wireEvents() {
   document.querySelector('[data-beginner-mode]')?.addEventListener('change', (event) => {
+    if (event.target.checked) setBeginnerSensitivityBase(flightConfigValue('fc_rate_pid', []));
     state.beginnerMode = event.target.checked;
     localStorage.setItem(BEGINNER_MODE_STORAGE_KEY, state.beginnerMode ? '1' : '0');
     render();
@@ -4328,7 +4452,7 @@ function wireEvents() {
   document.querySelectorAll('[data-beginner-sensitivity]').forEach((input) => {
     input.addEventListener('input', () => {
       const output = document.querySelector(`[data-beginner-sensitivity-output="${input.dataset.beginnerSensitivity}"]`);
-      if (output) output.textContent = t('flight.beginnerSensitivityValue', {level: input.value, value: beginnerSensitivityGain(input.value).toFixed(1)});
+      if (output) output.textContent = t('flight.beginnerSensitivityValue', {level: input.value});
     });
   });
   document.querySelector('#hardware-form')?.addEventListener('submit', saveHardwareJson);
@@ -4462,6 +4586,8 @@ function wireEvents() {
       if (action === 'community-catalog-refresh') void loadCommunityCatalog();
       if (action === 'community-submit') openCommunitySubmission();
       if (action === 'community-close') closeCommunitySubmission();
+      if (action === 'beginner-guide-start') startBeginnerGuide();
+      if (action === 'beginner-guide-cancel') cancelBeginnerGuide();
     });
   });
 }
