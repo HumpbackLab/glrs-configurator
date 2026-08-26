@@ -2988,7 +2988,7 @@ function renderStatus() {
       <section class="panel">
         <h2>${t('status.sensors')}</h2>
         <div class="metric"><span>${t('status.gyro')}</span><strong>${state.target?.['has-gyro'] ? t('value.detected') : t('value.notDetected')}</strong></div>
-        ${state.target?.['has-vbat'] ? `<div class="metric"><span>${t('status.vbat')}</span><strong>${(state.target['vbat-voltage'] * 0.01).toFixed(2)} V</strong></div>` : ''}
+        ${state.target?.['has-vbat'] ? `<div class="metric"><span>${t('status.vbat')}</span><strong>${(state.target['vbat-voltage'] * 0.1).toFixed(2)} V</strong></div>` : ''}
       </section>
       <section class="panel profile-panel">
         <h2>${t('profile.heading')}</h2>
