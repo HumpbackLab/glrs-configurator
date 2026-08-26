@@ -229,7 +229,7 @@
     "ratePid": "Rate PID",
     "ratePidHelp": "Inner-loop angular-rate control for RATE and ANGLE modes.",
     "beginnerSensitivity": "Sensitivity (feedback strength)",
-    "beginnerSensitivityHelp": "Adjust three-axis feedback from 0.2x to 2x of the current default sensitivity. The default is level 5.",
+    "beginnerSensitivityHelp": "Adjust three-axis feedback from 0.5x to 2x of the shared baseline. Level 5 is 1x.",
     "beginnerSensitivityValue": "Level {level}",
     "angleRateLimits": "ANGLE Rate Limits",
     "angleRateLimitsHelp": "Limits the Roll and Pitch angular-rate targets produced by the outer angle loop. Default: 100°/s per axis.",

@@ -229,7 +229,7 @@
     "ratePid": "Rate PID",
     "ratePidHelp": "RATE 与 ANGLE 模式共用的角速度内环控制参数。",
     "beginnerSensitivity": "感度（反馈强度）",
-    "beginnerSensitivityHelp": "以当前配置的默认感度为基准调节三轴反馈强度，范围为0.2倍到2倍，默认5级。",
+    "beginnerSensitivityHelp": "调节三轴反馈强度，范围为通用基准的0.5倍到2倍，5级为1倍。",
     "beginnerSensitivityValue": "{level}级",
     "angleRateLimits": "ANGLE 角速度限制",
     "angleRateLimitsHelp": "限制角度外环输出给角速度内环的 Roll/Pitch 目标角速度；每轴默认 100°/s。",

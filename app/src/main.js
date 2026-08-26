@@ -8,7 +8,12 @@ const API_STORAGE_KEY = 'elrs-local-rx-api';
 const LOCAL_PROXY_PATH = '/__elrs_proxy__';
 const UPDATE_SOURCE_STORAGE_KEY = 'elrs-app-update-source';
 const BEGINNER_MODE_STORAGE_KEY = 'elrs-beginner-mode';
-const BEGINNER_SENSITIVITY_BASE_STORAGE_KEY = 'elrs-beginner-sensitivity-base';
+const BEGINNER_RATE_PID_BASE = [
+  5, 0.6, 0.05, 50,
+  5, 0.6, 0.05, 50,
+  5, 0.6, 0.05, 50,
+];
+const BEGINNER_SENSITIVITY_GAINS = [0.5, 0.625, 0.75, 0.875, 1, 1.2, 1.4, 1.6, 1.8, 2];
 const PROFILE_FORMAT = 'gyro-elrs-profile';
 const PROFILE_VERSION = 1;
 const PROFILE_SUBMISSION_FORMAT = 'gyro-elrs-profile-submission';
@@ -49,7 +54,6 @@ const state = {
   uploadProgress: null,
   updateSource: loadUpdateSource(),
   beginnerMode: loadBeginnerMode(),
-  beginnerSensitivityBase: null,
   beginnerGuide: {active: false, step: 0},
   appUpdate: {
     status: 'idle',
@@ -1066,56 +1070,44 @@ async function saveFlight(event) {
   }, t('message.flightSaved'));
 }
 
-function beginnerSensitivityBaseValues(ratePid) {
-  return [0, 4, 8].map((index) => {
-    const value = Number(ratePid?.[index]);
-    return Number.isFinite(value) && value > 0 ? value : 1;
-  });
-}
-
-function setBeginnerSensitivityBase(ratePid) {
-  const values = beginnerSensitivityBaseValues(ratePid);
-  state.beginnerSensitivityBase = values;
-  localStorage.setItem(BEGINNER_SENSITIVITY_BASE_STORAGE_KEY, JSON.stringify({
-    target: state.target?.target || '',
-    values,
-  }));
-  return values;
-}
-
-function beginnerSensitivityBase(ratePid) {
-  if (Array.isArray(state.beginnerSensitivityBase)) return state.beginnerSensitivityBase;
-  try {
-    const stored = JSON.parse(localStorage.getItem(BEGINNER_SENSITIVITY_BASE_STORAGE_KEY) || 'null');
-    if (stored?.target === (state.target?.target || '') && Array.isArray(stored.values) && stored.values.length === 3) {
-      state.beginnerSensitivityBase = beginnerSensitivityBaseValues(stored.values);
-      return state.beginnerSensitivityBase;
-    }
-  } catch {
-    // Ignore malformed local storage and use the current configuration.
-  }
-  return setBeginnerSensitivityBase(ratePid);
-}
-
-function beginnerSensitivityLevel(value, baseValue) {
+function beginnerSensitivityLevel(value, baseValue = BEGINNER_RATE_PID_BASE[0]) {
   const numeric = Number(value);
   const base = Number(baseValue);
   if (!Number.isFinite(numeric) || numeric <= 0 || !Number.isFinite(base) || base <= 0) return 5;
-  return Math.max(1, Math.min(10, Math.round((numeric / base) / 0.2)));
+  const gain = numeric / base;
+  let closestIndex = 0;
+  BEGINNER_SENSITIVITY_GAINS.forEach((candidate, index) => {
+    if (Math.abs(candidate - gain) < Math.abs(BEGINNER_SENSITIVITY_GAINS[closestIndex] - gain)) closestIndex = index;
+  });
+  return closestIndex + 1;
 }
 
 function beginnerSensitivityGain(level) {
-  return Number((Math.max(1, Math.min(10, Number(level) || 5)) * 0.2).toFixed(1));
+  const index = Math.max(1, Math.min(10, Number(level) || 5)) - 1;
+  return BEGINNER_SENSITIVITY_GAINS[index];
+}
+
+function beginnerRatePidFromLevels(levels) {
+  const ratePid = [...BEGINNER_RATE_PID_BASE];
+  [0, 1, 2].forEach((axis) => {
+    const gain = beginnerSensitivityGain(levels[axis]);
+    const offset = axis * 4;
+    ratePid[offset] = Number((BEGINNER_RATE_PID_BASE[offset] * gain).toFixed(2));
+    ratePid[offset + 1] = Number((BEGINNER_RATE_PID_BASE[offset + 1] * gain).toFixed(2));
+    ratePid[offset + 2] = Number((BEGINNER_RATE_PID_BASE[offset + 2] * gain).toFixed(2));
+  });
+  return ratePid;
+}
+
+function beginnerRatePidFromImportedRatePid(ratePid) {
+  const levels = [0, 1, 2].map((axis) => beginnerSensitivityLevel(ratePid?.[axis * 4]));
+  return beginnerRatePidFromLevels(levels);
 }
 
 function readBeginnerRatePid(form) {
-  const ratePid = [...flightConfigValue('fc_rate_pid', Array(12).fill(0))];
-  const baseValues = beginnerSensitivityBase(ratePid);
-  [0, 1, 2].forEach((axis) => {
-    const level = intOrDefault(form.elements[`beginner-sensitivity-${axis}`]?.value, 5);
-    ratePid[axis * 4] = Number((baseValues[axis] * beginnerSensitivityGain(level)).toFixed(2));
-  });
-  return ratePid;
+  const levels = [0, 1, 2].map((axis) =>
+    intOrDefault(form.elements[`beginner-sensitivity-${axis}`]?.value, 5));
+  return beginnerRatePidFromLevels(levels);
 }
 
 function startBeginnerGuide() {
@@ -1143,6 +1135,7 @@ function beginnerGuideConfig() {
   const payload = {
     ...config(),
     ...flight,
+    fc_rate_pid: beginnerRatePidFromImportedRatePid(flight.fc_rate_pid),
     fc_orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4),
   };
   delete payload.fc_mixer_count;
@@ -2802,7 +2795,6 @@ async function handleCommunityProfileAction(action, id) {
       state.beginnerGuide.step = 2;
       state.tab = 'status';
       state.beginnerMode = true;
-      setBeginnerSensitivityBase(profile.flight.ratePid);
       localStorage.setItem(BEGINNER_MODE_STORAGE_KEY, '1');
     }
     applyImportedProfile(profile);
@@ -3456,11 +3448,10 @@ function renderFlight() {
   const matrix = orientationMatrixOrIdentity(state.orientationMatrix);
   const installEuler = installEulerFromOrientationMatrix(matrix);
   if (state.beginnerMode) {
-    const sensitivityBase = beginnerSensitivityBase(ratePid);
     const sensitivityAxes = [
-      ['roll', t('flight.roll'), ratePid[0], sensitivityBase[0]],
-      ['pitch', t('flight.pitch'), ratePid[4], sensitivityBase[1]],
-      ['yaw', t('flight.yaw'), ratePid[8], sensitivityBase[2]],
+      ['roll', t('flight.roll'), ratePid[0]],
+      ['pitch', t('flight.pitch'), ratePid[4]],
+      ['yaw', t('flight.yaw'), ratePid[8]],
     ];
     return `
       <section class="panel beginner-flight-panel">
@@ -3470,8 +3461,8 @@ function renderFlight() {
           <section class="beginner-sensitivity-card">
             <div class="beginner-sensitivity-header"><h3>${t('flight.beginnerSensitivity')}</h3><p>${t('flight.beginnerSensitivityHelp')}</p></div>
             <div class="beginner-sensitivity-grid">
-              ${sensitivityAxes.map(([axis, label, gain, base]) => {
-                const level = beginnerSensitivityLevel(gain, base);
+              ${sensitivityAxes.map(([axis, label, gain]) => {
+                const level = beginnerSensitivityLevel(gain);
                 return `<label class="beginner-sensitivity-field" for="beginner-sensitivity-${axis}">
                   <span class="beginner-sensitivity-label"><strong>${label}</strong><output data-beginner-sensitivity-output="${axis}">${t('flight.beginnerSensitivityValue', {level})}</output></span>
                   <input id="beginner-sensitivity-${axis}" name="beginner-sensitivity-${['roll', 'pitch', 'yaw'].indexOf(axis)}" data-beginner-sensitivity="${axis}" type="range" min="1" max="10" step="1" value="${level}">
@@ -4374,7 +4365,6 @@ function render() {
 
 function wireEvents() {
   document.querySelector('[data-beginner-mode]')?.addEventListener('change', (event) => {
-    if (event.target.checked) setBeginnerSensitivityBase(flightConfigValue('fc_rate_pid', []));
     state.beginnerMode = event.target.checked;
     localStorage.setItem(BEGINNER_MODE_STORAGE_KEY, state.beginnerMode ? '1' : '0');
     render();
