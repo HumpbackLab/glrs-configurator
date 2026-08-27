@@ -232,6 +232,7 @@
     "beginnerSensitivityHelp": "Adjust three-axis feedback from 0.5x to 2x of the shared baseline. Level 5 is 1x.",
     "beginnerSensitivityValue": "Level {level}",
     "beginnerReverseFeedback": "Reverse feedback",
+    "beginnerServoDebounce": "Servo jitter reduction",
     "angleRateLimits": "ANGLE Rate Limits",
     "angleRateLimitsHelp": "Limits the Roll and Pitch angular-rate targets produced by the outer angle loop. Default: 100°/s per axis.",
     "angleRateLimit": "Maximum angular rate",

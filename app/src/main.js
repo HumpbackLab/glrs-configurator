@@ -1106,7 +1106,7 @@ function beginnerSensitivityGain(level) {
   return BEGINNER_SENSITIVITY_GAINS[index];
 }
 
-function beginnerRatePidFromLevels(levels, reversed = []) {
+function beginnerRatePidFromLevels(levels, reversed = [], servoDebounce = []) {
   const ratePid = [...BEGINNER_RATE_PID_BASE];
   [0, 1, 2].forEach((axis) => {
     const gain = beginnerSensitivityGain(levels[axis]);
@@ -1114,7 +1114,9 @@ function beginnerRatePidFromLevels(levels, reversed = []) {
     const offset = axis * 4;
     ratePid[offset] = Number((BEGINNER_RATE_PID_BASE[offset] * gain * sign).toFixed(2));
     ratePid[offset + 1] = Number((BEGINNER_RATE_PID_BASE[offset + 1] * gain * sign).toFixed(2));
-    ratePid[offset + 2] = Number((BEGINNER_RATE_PID_BASE[offset + 2] * gain * sign).toFixed(2));
+    ratePid[offset + 2] = servoDebounce[axis]
+      ? 0
+      : Number((BEGINNER_RATE_PID_BASE[offset + 2] * gain * sign).toFixed(2));
   });
   return ratePid;
 }
@@ -1122,7 +1124,8 @@ function beginnerRatePidFromLevels(levels, reversed = []) {
 function beginnerRatePidFromImportedRatePid(ratePid) {
   const levels = [0, 1, 2].map((axis) => beginnerSensitivityLevel(ratePid?.[axis * 4]));
   const reversed = [0, 1, 2].map((axis) => Number(ratePid?.[axis * 4]) < 0);
-  return beginnerRatePidFromLevels(levels, reversed);
+  const servoDebounce = [0, 1, 2].map((axis) => Number(ratePid?.[axis * 4 + 2]) === 0);
+  return beginnerRatePidFromLevels(levels, reversed, servoDebounce);
 }
 
 function readBeginnerRatePid(form) {
@@ -1130,7 +1133,9 @@ function readBeginnerRatePid(form) {
     intOrDefault(form.elements[`beginner-sensitivity-${axis}`]?.value, 5));
   const reversed = [0, 1, 2].map((axis) =>
     Boolean(form.elements[`beginner-reverse-feedback-${axis}`]?.checked));
-  return beginnerRatePidFromLevels(levels, reversed);
+  const servoDebounce = [0, 1, 2].map((axis) =>
+    Boolean(form.elements[`beginner-servo-debounce-${axis}`]?.checked));
+  return beginnerRatePidFromLevels(levels, reversed, servoDebounce);
 }
 
 function startBeginnerGuide() {
@@ -3499,7 +3504,10 @@ function renderFlight() {
                     <span class="beginner-sensitivity-label"><strong>${label}</strong><output data-beginner-sensitivity-output="${axis}">${t('flight.beginnerSensitivityValue', {level})}</output></span>
                     <input id="beginner-sensitivity-${axis}" name="beginner-sensitivity-${axisIndex}" data-beginner-sensitivity="${axis}" type="range" min="1" max="10" step="1" value="${level}">
                   </label>
-                  <label class="beginner-reverse-feedback"><input name="beginner-reverse-feedback-${axisIndex}" type="checkbox" ${checked(Number(gain) < 0)}><span>${t('flight.beginnerReverseFeedback')}</span></label>
+                  <div class="beginner-feedback-options">
+                    <label class="beginner-reverse-feedback"><input name="beginner-reverse-feedback-${axisIndex}" type="checkbox" ${checked(Number(gain) < 0)}><span>${t('flight.beginnerReverseFeedback')}</span></label>
+                    <label class="beginner-reverse-feedback"><input name="beginner-servo-debounce-${axisIndex}" type="checkbox" ${checked(Number(ratePid[axisIndex * 4 + 2]) === 0)}><span>${t('flight.beginnerServoDebounce')}</span></label>
+                  </div>
                 </div>`;
               }).join('')}
             </div>

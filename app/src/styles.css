@@ -2219,6 +2219,7 @@ button:disabled {
 .beginner-sensitivity-field input[type="range"] { cursor: ew-resize; width: 100%; }
 .beginner-reverse-feedback { align-items: center; color: #4b5563; cursor: pointer; display: flex; font-size: 12px; gap: 7px; width: fit-content; }
 .beginner-reverse-feedback input { cursor: pointer; margin: 0; }
+.beginner-feedback-options { align-items: center; display: flex; flex-wrap: wrap; gap: 10px 14px; }
 
 .angle-rate-limit-grid {
   display: grid;
