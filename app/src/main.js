@@ -982,6 +982,25 @@ async function savePwm(event) {
   }, t('message.pwmSaved'));
 }
 
+async function saveBeginnerPwm() {
+  if (!pwmConnected() || !state.profileDraft?.pwm?.length || state.profileImportError) return;
+  const payload = {
+    ...config(),
+    pwm: state.profileDraft.pwm,
+    fc_pwm_output_limits: state.profileDraft.pwmLimits,
+    'serial1-protocol': state.profileDraft.serial1Protocol,
+  };
+  await runBusy(async () => {
+    await apiFetch('/config', {method: 'POST', body: JSON.stringify(payload)});
+    state.profileDraft.pwm = null;
+    state.profileDraft.pwmLimits = null;
+    state.profileDraft.serial1Protocol = null;
+    if (!state.profileDraft.flight) state.profileDraft = null;
+    markProfileSectionApplied('pwm');
+    await loadDevice();
+  }, t('message.pwmSaved'));
+}
+
 async function saveFlight(event) {
   event.preventDefault();
   if (!state.target) return;
@@ -1172,6 +1191,11 @@ async function saveBeginnerFlightOrientation(form) {
     fc_orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4),
     fc_rate_pid: readBeginnerRatePid(form),
   };
+  // The configuration read endpoint exposes PWM entries as objects with
+  // metadata, while the write endpoint expects an array of raw integers.
+  // Beginner mode does not edit PWM, so leave it out and preserve it on the
+  // receiver instead of sending the read-only object representation back.
+  delete nextConfig.pwm;
   await runBusy(async () => {
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(nextConfig)});
     markProfileSectionApplied('flight');
@@ -3047,6 +3071,7 @@ function renderPwm() {
     const usageProfile = currentCommunityUsageProfile();
     const usage = communityUsageInstructions(usageProfile);
     const hasMixer = Array.isArray(usageProfile.flight.mixer) && usageProfile.flight.mixer.length > 0;
+    const canSave = Boolean(state.profileDraft?.pwm?.length) && pwmConnected() && !state.profileImportError;
     return `
       <section class="panel beginner-pwm-panel">
         <h2>${t('pwm.heading')}</h2>
@@ -3055,6 +3080,7 @@ function renderPwm() {
           <strong>${t('community.catalog.usageHeading')}</strong>
           ${!hasMixer ? `<div class="helper">${t('pwm.beginnerModeNoMixer')}</div>` : usage.length ? `<ul>${usage.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>` : `<div class="helper">${t('community.catalog.usageEmpty')}</div>`}
         </div>
+        <div class="actions"><button class="primary" type="button" data-action="beginner-pwm-save" ${state.busy || !canSave ? 'disabled' : ''}>${t('action.save')}</button></div>
       </section>`;
   }
   const entries = pwmEntries();
@@ -4586,6 +4612,7 @@ function wireEvents() {
       if (action === 'community-close') closeCommunitySubmission();
       if (action === 'beginner-guide-start') startBeginnerGuide();
       if (action === 'beginner-guide-cancel') cancelBeginnerGuide();
+      if (action === 'beginner-pwm-save') void saveBeginnerPwm();
     });
   });
 }
