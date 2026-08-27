@@ -9,9 +9,9 @@ const LOCAL_PROXY_PATH = '/__elrs_proxy__';
 const UPDATE_SOURCE_STORAGE_KEY = 'elrs-app-update-source';
 const BEGINNER_MODE_STORAGE_KEY = 'elrs-beginner-mode';
 const BEGINNER_RATE_PID_BASE = [
-  5, 0.6, 0.05, 50,
-  5, 0.6, 0.05, 50,
-  5, 0.6, 0.05, 50,
+  2, 0.6, 0.05, 50,
+  2, 0.6, 0.05, 50,
+  2, 0.6, 0.05, 50,
 ];
 const BEGINNER_SENSITIVITY_GAINS = [0.5, 0.625, 0.75, 0.875, 1, 1.2, 1.4, 1.6, 1.8, 2];
 const PROFILE_FORMAT = 'gyro-elrs-profile';
