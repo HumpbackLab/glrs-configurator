@@ -130,6 +130,7 @@
       "updatedAt": "Catalog updated: {date}",
       "cacheSaving": "Caching for offline use: {cached}/{total}",
       "cacheReady": "Offline cache ready: {cached}/{total} profiles, {images} images",
+      "firmwareCached": "firmware {version} cached",
       "cacheError": "Could not write the offline cache. You can browse now, but it may be unavailable offline.",
       "empty": "No community profiles match these filters.",
       "compatible": "Current target",
@@ -308,7 +309,7 @@
     }
   },
   "firmwareUpdate": {
-    "description": "While online, check for and download the latest LightFin Nano firmware. You can then connect to the receiver WiFi to compare versions and flash it manually.",
+    "description": "While online, the latest LightFin Nano firmware is checked, verified, and cached automatically. You can then connect to the receiver WiFi to compare versions and flash it manually.",
     "downloading": "Downloading and verifying firmware",
     "savedTo": "Firmware saved to {path}",
     "directFlashHint": "Once connected to the receiver, you can flash this download directly without locating it in Android's file manager.",

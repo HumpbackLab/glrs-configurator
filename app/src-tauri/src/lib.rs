@@ -702,7 +702,8 @@ mod firmware_updates {
     const GITHUB_DOWNLOAD_PREFIX: &str =
         "https://github.com/HumpbackLab/Gyro-ELRS/releases/download/";
     const GITEE_DOWNLOAD_PREFIX: &str = "https://gitee.com/ncer/Gyro-ELRS/releases/download/";
-    const BETA_DOWNLOAD_PREFIX: &str = "https://github.com/HumpbackLab/Gyro-ELRS/releases/download/";
+    const BETA_DOWNLOAD_PREFIX: &str =
+        "https://github.com/HumpbackLab/Gyro-ELRS/releases/download/";
     const GITHUB_RELEASE_API: &str =
         "https://api.github.com/repos/HumpbackLab/Gyro-ELRS/releases/tags/";
     const GITEE_RELEASE_API: &str = "https://gitee.com/api/v5/repos/ncer/Gyro-ELRS/releases/tags/";
@@ -807,6 +808,8 @@ mod firmware_updates {
         result: DownloadedFirmware,
         size: u64,
         sha256: String,
+        #[serde(default)]
+        managed_cache: bool,
     }
 
     pub struct PendingFirmwareUpdate(Mutex<Option<PendingFirmware>>);
@@ -1060,6 +1063,25 @@ mod firmware_updates {
                 "multiple firmwares use this target; an exact product name match is required"
             );
         }
+
+        #[test]
+        fn treats_existing_download_state_as_user_managed() {
+            let stored: StoredDownloadedFirmware = serde_json::from_value(serde_json::json!({
+                "result": {
+                    "path": "/tmp/firmware.bin",
+                    "filename": "firmware.bin",
+                    "productName": "LightFin Nano 2.4GHz RX",
+                    "target": "Unified_ESP32C3_2400_RX",
+                    "version": "1.0.0_e364",
+                    "size": 3
+                },
+                "size": 3,
+                "sha256": "abc"
+            }))
+            .unwrap();
+
+            assert!(!stored.managed_cache);
+        }
     }
 
     #[tauri::command]
@@ -1144,13 +1166,12 @@ mod firmware_updates {
         })
     }
 
-    #[tauri::command]
-    pub async fn download_firmware_update(
+    async fn download_firmware_update_inner(
         app: AppHandle,
         pending: State<'_, PendingFirmwareUpdate>,
         downloaded_firmware: State<'_, DownloadedFirmwareUpdate>,
-        destination_path: String,
-        on_event: Channel<DownloadEvent>,
+        destination_path: Option<String>,
+        on_event: Option<&Channel<DownloadEvent>>,
     ) -> Result<DownloadedFirmware, String> {
         let pending = pending
             .0
@@ -1158,6 +1179,32 @@ mod firmware_updates {
             .map_err(|_| "firmware update state poisoned")?
             .take()
             .ok_or_else(|| "no pending firmware update".to_string())?;
+        let automatic_cache = destination_path.is_none();
+        let managed_cache = automatic_cache
+            || destination_path
+                .as_deref()
+                .is_some_and(|path| path.starts_with("content://"));
+        if automatic_cache {
+            let existing = downloaded_firmware
+                .0
+                .lock()
+                .map_err(|_| "downloaded firmware state poisoned")?
+                .clone();
+            if let Some(existing) = existing {
+                let matches_latest = existing.managed_cache
+                    && existing.result.version == pending.version
+                    && existing
+                        .result
+                        .target
+                        .trim()
+                        .eq_ignore_ascii_case(pending.entry.target.trim())
+                    && existing.size == pending.entry.size
+                    && existing.sha256.eq_ignore_ascii_case(&pending.entry.sha256);
+                if matches_latest && validate_stored_firmware(&existing).is_ok() {
+                    return Ok(existing.result);
+                }
+            }
+        }
         let url = download_url(&pending.entry, &pending.source)?;
         let mut response = Client::builder()
             .timeout(Duration::from_secs(120))
@@ -1178,7 +1225,16 @@ mod firmware_updates {
         }
 
         safe_filename(&pending.entry.filename)?;
-        let destination = if destination_path.starts_with("content://") {
+        let destination_path = destination_path.unwrap_or_default();
+        let destination = if automatic_cache {
+            let cache_dir = app
+                .path()
+                .app_cache_dir()
+                .map_err(|error| error.to_string())?
+                .join("firmware");
+            fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
+            cache_dir.join(safe_filename(&pending.entry.filename)?)
+        } else if destination_path.starts_with("content://") {
             let cache_dir = app
                 .path()
                 .app_cache_dir()
@@ -1198,9 +1254,11 @@ mod firmware_updates {
         let mut file = File::create(&temporary).map_err(|error| error.to_string())?;
         let mut hasher = Sha256::new();
         let mut downloaded = 0u64;
-        let _ = on_event.send(DownloadEvent::Started {
-            content_length: response.content_length(),
-        });
+        if let Some(on_event) = on_event {
+            let _ = on_event.send(DownloadEvent::Started {
+                content_length: response.content_length(),
+            });
+        }
         while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
             downloaded += chunk.len() as u64;
             if downloaded > MAX_FIRMWARE_SIZE {
@@ -1209,9 +1267,11 @@ mod firmware_updates {
             }
             file.write_all(&chunk).map_err(|error| error.to_string())?;
             hasher.update(&chunk);
-            let _ = on_event.send(DownloadEvent::Progress {
-                chunk_length: chunk.len(),
-            });
+            if let Some(on_event) = on_event {
+                let _ = on_event.send(DownloadEvent::Progress {
+                    chunk_length: chunk.len(),
+                });
+            }
         }
         drop(file);
 
@@ -1226,7 +1286,9 @@ mod firmware_updates {
             fs::remove_file(&destination).map_err(|error| error.to_string())?;
         }
         fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
-        let _ = on_event.send(DownloadEvent::Finished);
+        if let Some(on_event) = on_event {
+            let _ = on_event.send(DownloadEvent::Finished);
+        }
 
         let downloaded_firmware_result = DownloadedFirmware {
             filename: destination
@@ -1244,17 +1306,52 @@ mod firmware_updates {
             result: downloaded_firmware_result.clone(),
             size: pending.entry.size,
             sha256: pending.entry.sha256,
+            managed_cache,
         };
         let serialized_state =
             serde_json::to_vec(&stored_downloaded_firmware).map_err(|error| error.to_string())?;
-        *downloaded_firmware
-            .0
-            .lock()
-            .map_err(|_| "downloaded firmware state poisoned")? = Some(stored_downloaded_firmware);
-        if let Ok(state_path) = downloaded_firmware_state_path(&app) {
-            let _ = fs::write(state_path, serialized_state);
+        let state_path = downloaded_firmware_state_path(&app)?;
+        fs::write(state_path, serialized_state).map_err(|error| error.to_string())?;
+        let previous = {
+            let mut downloaded = downloaded_firmware
+                .0
+                .lock()
+                .map_err(|_| "downloaded firmware state poisoned")?;
+            downloaded.replace(stored_downloaded_firmware)
+        };
+        if let Some(previous) = previous {
+            if previous.managed_cache && previous.result.path != downloaded_firmware_result.path {
+                let _ = fs::remove_file(previous.result.path);
+            }
         }
         Ok(downloaded_firmware_result)
+    }
+
+    #[tauri::command]
+    pub async fn download_firmware_update(
+        app: AppHandle,
+        pending: State<'_, PendingFirmwareUpdate>,
+        downloaded_firmware: State<'_, DownloadedFirmwareUpdate>,
+        destination_path: String,
+        on_event: Channel<DownloadEvent>,
+    ) -> Result<DownloadedFirmware, String> {
+        download_firmware_update_inner(
+            app,
+            pending,
+            downloaded_firmware,
+            Some(destination_path),
+            Some(&on_event),
+        )
+        .await
+    }
+
+    #[tauri::command]
+    pub async fn cache_firmware_update(
+        app: AppHandle,
+        pending: State<'_, PendingFirmwareUpdate>,
+        downloaded_firmware: State<'_, DownloadedFirmwareUpdate>,
+    ) -> Result<DownloadedFirmware, String> {
+        download_firmware_update_inner(app, pending, downloaded_firmware, None, None).await
     }
 
     #[tauri::command]
@@ -1348,6 +1445,7 @@ pub fn run() {
             #[cfg(target_os = "android")]
             android_app_updates::install_app_update,
             firmware_updates::check_firmware_update,
+            firmware_updates::cache_firmware_update,
             firmware_updates::download_firmware_update,
             firmware_updates::load_downloaded_firmware,
             firmware_updates::get_downloaded_firmware

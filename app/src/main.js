@@ -164,6 +164,7 @@ let pwmRuntimeUpdateInFlight = false;
 let pwmRuntimePendingValues = null;
 let communityCacheDbPromise = null;
 let communityCatalogLoadPromise = null;
+let firmwareCachePromise = null;
 let pidLiveRateWindow = [];
 let connectionHealthTimer = null;
 let connectionHealthInFlight = false;
@@ -1789,6 +1790,7 @@ async function checkFirmwareUpdate() {
     render();
     return;
   }
+  if (firmwareCachePromise) await firmwareCachePromise;
   state.firmwareUpdate = {...state.firmwareUpdate, status: 'checking', latestVersion: '', notes: '', error: '', path: '', downloaded: 0, total: 0};
   render();
   try {
@@ -1817,6 +1819,43 @@ async function checkFirmwareUpdate() {
     state.firmwareUpdate = {...state.firmwareUpdate, status: 'error', error: String(error)};
   }
   render();
+}
+
+function cacheLatestFirmware() {
+  if (!isTauriApp()) return Promise.resolve();
+  if (firmwareCachePromise) return firmwareCachePromise;
+  firmwareCachePromise = (async () => {
+    const source = state.updateSource;
+    const result = await tauriInvoke('check_firmware_update', {source, device: null});
+    if (!result.update) return;
+    const cached = await tauriInvoke('cache_firmware_update');
+    if (source !== state.updateSource) return;
+    const currentVersion = state.firmwareUpdate.currentVersion || '';
+    const connectedTarget = state.target?.target || '';
+    const compatible = connectedTarget
+      ? cached.target.trim().toLowerCase() === connectedTarget.trim().toLowerCase()
+      : null;
+    state.firmwareUpdate = {
+      ...state.firmwareUpdate,
+      status: currentVersion && currentVersion === cached.version ? 'current' : 'downloaded',
+      latestVersion: cached.version || result.latestVersion,
+      notes: result.notes || '',
+      productName: cached.productName || result.update.productName,
+      target: cached.target || result.update.target,
+      filename: cached.filename || result.update.filename,
+      downloaded: cached.size || result.update.size || 0,
+      total: cached.size || result.update.size || 0,
+      path: cached.path || '',
+      compatible,
+      error: '',
+    };
+    render();
+  })().catch(() => {
+    // Automatic caching is best-effort; an already verified cache remains usable offline.
+  }).finally(() => {
+    firmwareCachePromise = null;
+  });
+  return firmwareCachePromise;
 }
 
 async function downloadFirmwareUpdate() {
@@ -3138,7 +3177,7 @@ function renderCommunityCatalog() {
       </div>
       <div class="community-catalog-summary"><span id="community-catalog-count">${t('community.catalog.resultCount', {count: communityFilteredProfiles().length})}</span>${state.communityCatalog.generatedAt ? `<span>${t('community.catalog.updatedAt', {date: new Date(state.communityCatalog.generatedAt).toLocaleString()})}</span>` : ''}</div>
       ${state.communityCatalog.cacheStatus === 'saving' ? `<div class="community-cache-status saving">${t('community.catalog.cacheSaving', {cached: state.communityCatalog.cachedProfiles, total: state.communityCatalog.cacheTotal})}</div>` : ''}
-      ${state.communityCatalog.cacheStatus === 'ready' ? `<div class="community-cache-status ready">${t('community.catalog.cacheReady', {cached: state.communityCatalog.cachedProfiles, total: state.communityCatalog.cacheTotal, images: state.communityCatalog.cachedImages})}</div>` : ''}
+      ${state.communityCatalog.cacheStatus === 'ready' ? `<div class="community-cache-status ready">${t('community.catalog.cacheReady', {cached: state.communityCatalog.cachedProfiles, total: state.communityCatalog.cacheTotal, images: state.communityCatalog.cachedImages})}${state.firmwareUpdate.path && state.firmwareUpdate.latestVersion ? ` · ${t('community.catalog.firmwareCached', {version: state.firmwareUpdate.latestVersion})}` : ''}</div>` : ''}
       ${state.communityCatalog.cacheStatus === 'error' ? `<div class="community-cache-status error">${t('community.catalog.cacheError')}</div>` : ''}
       <div id="community-catalog-list" class="community-catalog-list">${renderCommunityProfileCards()}</div>` : ''}
     </section>
@@ -4768,6 +4807,7 @@ function wireEvents() {
     state.appUpdate = {...state.appUpdate, status: 'idle', version: '', notes: '', error: ''};
     state.firmwareUpdate = {...state.firmwareUpdate, status: 'idle', latestVersion: '', notes: '', productName: '', target: '', filename: '', path: '', error: ''};
     render();
+    void cacheLatestFirmware();
   };
   document.querySelector('#app-update-source')?.addEventListener('change', updateSourceChanged);
   document.querySelector('#firmware-update-source')?.addEventListener('change', updateSourceChanged);
@@ -5100,12 +5140,16 @@ window.addEventListener('beforeunload', (event) => {
   event.preventDefault();
   event.returnValue = '';
 });
-window.addEventListener('online', () => { void loadCommunityCatalog({background: true}); });
+window.addEventListener('online', () => {
+  void loadCommunityCatalog({background: true});
+  void cacheLatestFirmware();
+});
 render();
 async function initializeApp() {
   scheduleConnectionHealthCheck();
   void loadCommunityCatalog({background: true});
   await restoreDownloadedFirmware();
+  void cacheLatestFirmware();
   await connectDevice(t('message.connected'));
   if (isTauriApp()) checkAppUpdate();
 }

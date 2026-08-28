@@ -130,6 +130,7 @@
       "updatedAt": "目录更新：{date}",
       "cacheSaving": "正在缓存离线配置：{cached}/{total}",
       "cacheReady": "离线缓存已就绪：配置 {cached}/{total}，图片 {images}",
+      "firmwareCached": "固件 {version} 已缓存",
       "cacheError": "离线缓存写入失败；当前可以浏览，但断网后可能不可用。",
       "empty": "没有找到符合条件的社区配置。",
       "compatible": "当前目标",
@@ -308,7 +309,7 @@
     }
   },
   "firmwareUpdate": {
-    "description": "联网时检查并下载最新 LightFin Nano 固件；随后连接接收机 WiFi，即可比较版本并使用下方功能手动刷写。",
+    "description": "联网时会自动检查、校验并缓存最新 LightFin Nano 固件；随后连接接收机 WiFi，即可离线比较版本并使用下方功能手动刷写。",
     "downloading": "正在下载并校验固件",
     "savedTo": "固件已保存到 {path}",
     "directFlashHint": "连接接收机后可直接刷写已下载固件，无需在安卓文件管理器中查找。",
