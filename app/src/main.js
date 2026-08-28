@@ -25,6 +25,9 @@ const PROFILE_CATALOG_API = import.meta.env.VITE_PROFILE_CATALOG_URL
 const AIRCRAFT_MODEL_URL = `${import.meta.env.BASE_URL}models/model_rudderless_plane.gltf`;
 const COMMUNITY_IMAGE_MAX_BYTES = 120 * 1024;
 const COMMUNITY_IMAGE_MAX_DIMENSION = 800;
+const COMMUNITY_CACHE_DB = 'gyro-elrs-community-cache';
+const COMMUNITY_CACHE_STORE = 'entries';
+const COMMUNITY_CACHE_VERSION = 1;
 
 function defaultUpdateSource() {
   return getLocale() === 'zh-CN' ? 'gitee' : 'github';
@@ -139,6 +142,7 @@ const state = {
     usageProfileId: '',
     usageById: {},
     usageLoadingById: {},
+    imageDataByUrl: {},
     error: '',
   },
 };
@@ -153,6 +157,8 @@ let orientationAircraftView = null;
 let pwmRuntimeUpdateTimer = null;
 let pwmRuntimeUpdateInFlight = false;
 let pwmRuntimePendingValues = null;
+let communityCacheDbPromise = null;
+let communityCatalogLoadPromise = null;
 let pidLiveRateWindow = [];
 let connectionHealthTimer = null;
 let connectionHealthInFlight = false;
@@ -2551,6 +2557,128 @@ function validateCommunityProfile(profile) {
   return profile;
 }
 
+function openCommunityCacheDb() {
+  if (!('indexedDB' in window)) return Promise.reject(new Error('indexeddb_unavailable'));
+  if (!communityCacheDbPromise) {
+    communityCacheDbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(COMMUNITY_CACHE_DB, COMMUNITY_CACHE_VERSION);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(COMMUNITY_CACHE_STORE)) {
+          request.result.createObjectStore(COMMUNITY_CACHE_STORE);
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('community_cache_open_failed'));
+    });
+  }
+  return communityCacheDbPromise;
+}
+
+async function communityCacheGet(key) {
+  try {
+    const db = await openCommunityCacheDb();
+    return await new Promise((resolve, reject) => {
+      const request = db.transaction(COMMUNITY_CACHE_STORE, 'readonly').objectStore(COMMUNITY_CACHE_STORE).get(key);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('community_cache_read_failed'));
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+async function communityCachePut(key, value) {
+  try {
+    const db = await openCommunityCacheDb();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(COMMUNITY_CACHE_STORE, 'readwrite');
+      transaction.objectStore(COMMUNITY_CACHE_STORE).put(value, key);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error || new Error('community_cache_write_failed'));
+      transaction.onabort = () => reject(transaction.error || new Error('community_cache_write_aborted'));
+    });
+  } catch {
+    // The live catalog remains usable when persistent storage is unavailable or full.
+  }
+}
+
+async function communityProfileFromCache(item) {
+  const cached = await communityCacheGet(`profile:${item.id}`);
+  if (cached?.sha256 !== item.sha256 || typeof cached.raw !== 'string') return undefined;
+  if ((await sha256Hex(cached.raw)).toLowerCase() !== item.sha256.toLowerCase()) return undefined;
+  try {
+    const envelope = JSON.parse(cached.raw);
+    if (envelope.id !== item.id || !envelope.profile) return undefined;
+    return validateCommunityProfile(envelope.profile);
+  } catch {
+    return undefined;
+  }
+}
+
+async function pruneCommunityCache(catalog) {
+  try {
+    const allowedKeys = new Set(['catalog']);
+    catalog.profiles.forEach((item) => {
+      allowedKeys.add(`profile:${item.id}`);
+      if (item.imageUrl) allowedKeys.add(`image:${communityAssetUrl(item.imageUrl)}`);
+    });
+    const db = await openCommunityCacheDb();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(COMMUNITY_CACHE_STORE, 'readwrite');
+      const store = transaction.objectStore(COMMUNITY_CACHE_STORE);
+      const request = store.getAllKeys();
+      request.onsuccess = () => request.result.forEach((key) => {
+        if (!allowedKeys.has(key)) store.delete(key);
+      });
+      request.onerror = () => transaction.abort();
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error || new Error('community_cache_prune_failed'));
+      transaction.onabort = () => reject(transaction.error || new Error('community_cache_prune_aborted'));
+    });
+  } catch {
+    // Stale entries are harmless and can be pruned on a later refresh.
+  }
+}
+
+async function restoreCommunityCatalogFromCache() {
+  const cached = await communityCacheGet('catalog');
+  if (!cached?.catalog) return false;
+  let catalog;
+  try {
+    catalog = validateCommunityCatalog(cached.catalog);
+  } catch {
+    return false;
+  }
+
+  const [profileEntries, imageEntries] = await Promise.all([
+    Promise.all(catalog.profiles.map((item) => communityProfileFromCache(item))),
+    Promise.all(catalog.profiles.map((item) => item.imageUrl
+      ? communityCacheGet(`image:${communityAssetUrl(item.imageUrl)}`)
+      : undefined)),
+  ]);
+  const usageById = {};
+  const imageDataByUrl = {};
+  catalog.profiles.forEach((item, index) => {
+    const profileEntry = profileEntries[index];
+    if (profileEntry) usageById[item.id] = profileEntry;
+    const imageUrl = item.imageUrl ? communityAssetUrl(item.imageUrl) : '';
+    const imageEntry = imageEntries[index];
+    if (imageUrl && typeof imageEntry?.dataUrl === 'string' && imageEntry.dataUrl.startsWith('data:image/')) {
+      imageDataByUrl[imageUrl] = imageEntry.dataUrl;
+    }
+  });
+
+  state.communityCatalog.profiles = catalog.profiles;
+  state.communityCatalog.generatedAt = catalog.generatedAt || '';
+  state.communityCatalog.usageById = usageById;
+  state.communityCatalog.imageDataByUrl = imageDataByUrl;
+  state.communityCatalog.usageLoadingById = {};
+  state.communityCatalog.status = 'ready';
+  state.communityCatalog.error = '';
+  if (state.communityCatalog.open) render();
+  return true;
+}
+
 function openCommunityCatalog() {
   state.communityCatalog.open = true;
   render();
@@ -2582,10 +2710,22 @@ function validateCommunityCatalog(value) {
   return value;
 }
 
-async function loadCommunityCatalog() {
-  state.communityCatalog.status = 'loading';
-  state.communityCatalog.error = '';
-  render();
+function loadCommunityCatalog(options = {}) {
+  if (!communityCatalogLoadPromise) {
+    communityCatalogLoadPromise = refreshCommunityCatalog(options)
+      .finally(() => { communityCatalogLoadPromise = null; });
+  }
+  return communityCatalogLoadPromise;
+}
+
+async function refreshCommunityCatalog({background = false} = {}) {
+  const hadCachedCatalog = state.communityCatalog.status === 'ready'
+    || await restoreCommunityCatalogFromCache();
+  if (!background || !hadCachedCatalog) {
+    state.communityCatalog.status = 'loading';
+    state.communityCatalog.error = '';
+    if (state.communityCatalog.open) render();
+  }
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 12000);
   try {
@@ -2599,30 +2739,75 @@ async function loadCommunityCatalog() {
     state.communityCatalog.profiles = catalog.profiles;
     state.communityCatalog.generatedAt = catalog.generatedAt || '';
     state.communityCatalog.status = 'ready';
+    state.communityCatalog.error = '';
+    state.communityCatalog.usageById = {};
     state.communityCatalog.usageLoadingById = Object.fromEntries(catalog.profiles.map((item) => [item.id, true]));
-    void preloadCommunityUsage(catalog.profiles);
+    const profilesCached = await preloadCommunityUsage(catalog.profiles);
+    await preloadCommunityImages(catalog.profiles);
+    if (profilesCached) {
+      await communityCachePut('catalog', {catalog, cachedAt: new Date().toISOString()});
+      void pruneCommunityCache(catalog);
+    }
   } catch (error) {
-    state.communityCatalog.status = 'error';
-    state.communityCatalog.error = error.name === 'AbortError'
-      ? t('error.communityCatalogTimeout')
-      : (error.message || String(error));
+    if (hadCachedCatalog || state.communityCatalog.status === 'ready') {
+      state.communityCatalog.status = 'ready';
+      state.communityCatalog.error = '';
+    } else {
+      state.communityCatalog.status = 'error';
+      state.communityCatalog.error = error.name === 'AbortError'
+        ? t('error.communityCatalogTimeout')
+        : (error.message || String(error));
+    }
   } finally {
     window.clearTimeout(timeout);
-    render();
+    if (state.communityCatalog.open) render();
   }
 }
 
 async function preloadCommunityUsage(profiles) {
-  await Promise.all(profiles.map(async (item) => {
+  const results = await Promise.all(profiles.map(async (item) => {
     try {
       state.communityCatalog.usageById[item.id] = await fetchCommunityProfile(item);
+      return true;
     } catch {
       // Keep the card visible even if an optional usage preload fails.
+      return false;
     } finally {
       delete state.communityCatalog.usageLoadingById[item.id];
-      render();
+      if (state.communityCatalog.open) render();
     }
   }));
+  return results.every(Boolean);
+}
+
+async function fetchAndCacheCommunityImage(item) {
+  if (!item.imageUrl) return;
+  const imageUrl = communityAssetUrl(item.imageUrl);
+  if (!imageUrl || state.communityCatalog.imageDataByUrl[imageUrl]) return;
+  const cached = await communityCacheGet(`image:${imageUrl}`);
+  if (typeof cached?.dataUrl === 'string' && cached.dataUrl.startsWith('data:image/')) {
+    state.communityCatalog.imageDataByUrl[imageUrl] = cached.dataUrl;
+    return;
+  }
+
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(imageUrl, {cache: 'no-store', signal: controller.signal});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob = await response.blob();
+    if (!blob.type.startsWith('image/') || blob.size > COMMUNITY_IMAGE_MAX_BYTES * 2) return;
+    const dataUrl = await blobDataUrl(blob);
+    state.communityCatalog.imageDataByUrl[imageUrl] = dataUrl;
+    await communityCachePut(`image:${imageUrl}`, {dataUrl});
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function preloadCommunityImages(profiles) {
+  await Promise.all(profiles.map((item) => fetchAndCacheCommunityImage(item).catch(() => {})));
+  if (state.communityCatalog.open) render();
 }
 
 function communityFilteredProfiles() {
@@ -2660,7 +2845,8 @@ function renderCommunityProfileCards() {
     const compatible = Boolean(currentTarget && item.target && currentTarget === item.target);
     const usage = communityUsageInstructions(state.communityCatalog.usageById[item.id]);
     const usageLoading = Boolean(state.communityCatalog.usageLoadingById[item.id]);
-    const imageUrl = item.imageUrl ? communityAssetUrl(item.imageUrl) : '';
+    const remoteImageUrl = item.imageUrl ? communityAssetUrl(item.imageUrl) : '';
+    const imageUrl = state.communityCatalog.imageDataByUrl[remoteImageUrl] || remoteImageUrl;
     return `<article class="community-profile-card">
       <div class="community-profile-heading">
         <div><h3>${escapeHtml(item.title)}</h3><span>${escapeHtml(item.authorName || t('value.unknown'))}</span></div>
@@ -2754,6 +2940,8 @@ function validateUnifiedEsp32Firmware(bytes) {
 }
 
 async function fetchCommunityProfile(item) {
+  const cachedProfile = await communityProfileFromCache(item);
+  if (cachedProfile) return cachedProfile;
   const catalogUrl = new URL(PROFILE_CATALOG_API);
   const profileUrl = new URL(item.profileUrl, catalogUrl);
   if (profileUrl.origin !== catalogUrl.origin) throw new Error(t('error.communityProfileOrigin'));
@@ -2774,7 +2962,9 @@ async function fetchCommunityProfile(item) {
       throw new Error(t('error.profileJson'));
     }
     if (envelope.id !== item.id || !envelope.profile) throw new Error(t('error.communityProfileInvalid'));
-    return validateCommunityProfile(envelope.profile);
+    const profile = validateCommunityProfile(envelope.profile);
+    await communityCachePut(`profile:${item.id}`, {sha256: item.sha256, raw});
+    return profile;
   } catch (error) {
     if (error.name === 'AbortError') throw new Error(t('error.communityProfileTimeout'));
     throw error;
@@ -4832,9 +5022,11 @@ window.addEventListener('beforeunload', (event) => {
   event.preventDefault();
   event.returnValue = '';
 });
+window.addEventListener('online', () => { void loadCommunityCatalog({background: true}); });
 render();
 async function initializeApp() {
   scheduleConnectionHealthCheck();
+  void loadCommunityCatalog({background: true});
   await restoreDownloadedFirmware();
   await connectDevice(t('message.connected'));
   if (isTauriApp()) checkAppUpdate();
