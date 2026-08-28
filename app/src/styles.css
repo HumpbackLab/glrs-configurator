@@ -103,11 +103,29 @@ button:disabled {
 .flight-guide-banner { margin: 0 0 14px; }
 
 .beginner-guide-dialog {
-  max-width: 1100px;
+  max-width: 1280px;
 }
 
 .beginner-guide-dialog .orientation-editor {
   margin-top: 0;
+}
+
+.beginner-guide-dialog .orientation-results-layout {
+  grid-template-columns: minmax(0, 1fr) 180px;
+}
+
+.beginner-guide-dialog .orientation-results,
+.beginner-guide-dialog .orientation-results > div,
+.beginner-guide-dialog .orientation-results .table-shell,
+.beginner-guide-dialog .orientation-result-table {
+  justify-self: stretch;
+  max-width: none;
+  width: 100%;
+}
+
+.beginner-guide-dialog .orientation-results .table-shell {
+  align-self: stretch;
+  min-width: 100%;
 }
 
 .connection-status {
@@ -1047,7 +1065,7 @@ button:disabled {
   padding: 14px 16px;
 }
 
-.orientation-results {
+.orientation-results.imu-cal-results {
   grid-template-columns: minmax(0, 1fr);
   margin-top: 0;
 }
@@ -1064,7 +1082,7 @@ button:disabled {
 }
 
 .orientation-results .grid-table {
-  min-width: 560px;
+  min-width: 0;
   table-layout: fixed;
   width: 100%;
 }
@@ -1075,7 +1093,7 @@ button:disabled {
   width: 100%;
 }
 
-.orientation-result-label-column { width: 128px; }
+.orientation-result-label-column { width: 96px; }
 
 .orientation-results .grid-table thead th,
 .orientation-results .grid-table tbody th {
@@ -1092,8 +1110,8 @@ button:disabled {
   gap: 3px;
   justify-content: center;
   min-height: 48px;
-  min-width: 132px;
-  padding: 0 14px;
+  min-width: 0;
+  padding: 0 8px;
   white-space: nowrap;
 }
 
@@ -1110,6 +1128,7 @@ button:disabled {
 
 @media (max-width: 800px) {
   .orientation-results-layout { grid-template-columns: minmax(0, 1fr); }
+  .beginner-guide-dialog .orientation-results-layout { grid-template-columns: minmax(0, 1fr); }
 }
 
 .debug-aircraft-panel {
