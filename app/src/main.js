@@ -1160,19 +1160,42 @@ function cancelBeginnerGuide() {
   render();
 }
 
+function recoverBeginnerGuideDraft() {
+  if (state.profileDraft?.flight) return state.profileDraft;
+  if (!state.profileOriginal?.flight) return state.profileDraft;
+  try {
+    const {draft} = validateProfile(state.profileOriginal, {deviceAware: Boolean(state.configResponse)});
+    if (draft.flight) {
+      state.profileDraft = draft;
+      state.profileImportError = '';
+      return draft;
+    }
+  } catch (error) {
+    state.profileImportError = error.message || String(error);
+  }
+  return state.profileDraft;
+}
+
 function beginnerGuideConfig() {
-  const flight = state.profileDraft?.flight;
-  if (!flight) throw new Error(t('beginnerGuide.flightRequired'));
+  const draft = recoverBeginnerGuideDraft();
+  const flight = draft?.flight;
+  if (!flight && !Array.isArray(config().fc_rate_pid)) {
+    throw new Error(t('beginnerGuide.flightRequired'));
+  }
   const payload = {
     ...config(),
-    ...flight,
+    ...(flight || {}),
     fc_orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4),
   };
   delete payload.fc_mixer_count;
-  if (state.profileDraft?.pwm) {
-    payload.pwm = state.profileDraft.pwm;
-    payload.fc_pwm_output_limits = state.profileDraft.pwmLimits;
-    payload['serial1-protocol'] = state.profileDraft.serial1Protocol;
+  if (draft?.pwm) {
+    payload.pwm = draft.pwm;
+    payload.fc_pwm_output_limits = draft.pwmLimits;
+    payload['serial1-protocol'] = draft.serial1Protocol;
+  } else {
+    // The read endpoint exposes PWM objects, while the write endpoint expects raw integers.
+    // Omit PWM when it has already been applied so the receiver preserves its current values.
+    delete payload.pwm;
   }
   return payload;
 }
