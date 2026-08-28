@@ -143,6 +143,11 @@ const state = {
     usageById: {},
     usageLoadingById: {},
     imageDataByUrl: {},
+    cacheStatus: 'idle',
+    cachedAt: '',
+    cachedProfiles: 0,
+    cachedImages: 0,
+    cacheTotal: 0,
     error: '',
   },
 };
@@ -2634,8 +2639,10 @@ async function communityCachePut(key, value) {
       transaction.onerror = () => reject(transaction.error || new Error('community_cache_write_failed'));
       transaction.onabort = () => reject(transaction.error || new Error('community_cache_write_aborted'));
     });
+    return true;
   } catch {
     // The live catalog remains usable when persistent storage is unavailable or full.
+    return false;
   }
 }
 
@@ -2710,6 +2717,13 @@ async function restoreCommunityCatalogFromCache() {
   state.communityCatalog.usageById = usageById;
   state.communityCatalog.imageDataByUrl = imageDataByUrl;
   state.communityCatalog.usageLoadingById = {};
+  state.communityCatalog.cacheStatus = 'ready';
+  state.communityCatalog.cachedAt = cached.cachedAt || '';
+  state.communityCatalog.cachedProfiles = profileEntries.filter(Boolean).length;
+  state.communityCatalog.cachedImages = imageEntries.filter((entry) => (
+    typeof entry?.dataUrl === 'string' && entry.dataUrl.startsWith('data:image/')
+  )).length;
+  state.communityCatalog.cacheTotal = catalog.profiles.length;
   state.communityCatalog.status = 'ready';
   state.communityCatalog.error = '';
   if (state.communityCatalog.open) render();
@@ -2779,12 +2793,22 @@ async function refreshCommunityCatalog({background = false} = {}) {
     state.communityCatalog.error = '';
     state.communityCatalog.usageById = {};
     state.communityCatalog.usageLoadingById = Object.fromEntries(catalog.profiles.map((item) => [item.id, true]));
-    const profilesCached = await preloadCommunityUsage(catalog.profiles);
-    await preloadCommunityImages(catalog.profiles);
-    if (profilesCached) {
-      await communityCachePut('catalog', {catalog, cachedAt: new Date().toISOString()});
-      void pruneCommunityCache(catalog);
-    }
+    state.communityCatalog.cacheStatus = 'saving';
+    state.communityCatalog.cachedProfiles = 0;
+    state.communityCatalog.cachedImages = 0;
+    state.communityCatalog.cacheTotal = catalog.profiles.length;
+    const cachedAt = new Date().toISOString();
+    const catalogCached = await communityCachePut('catalog', {catalog, cachedAt});
+    if (state.communityCatalog.open) render();
+    const [cachedProfiles, cachedImages] = await Promise.all([
+      preloadCommunityUsage(catalog.profiles),
+      preloadCommunityImages(catalog.profiles),
+    ]);
+    state.communityCatalog.cachedProfiles = cachedProfiles;
+    state.communityCatalog.cachedImages = cachedImages;
+    state.communityCatalog.cachedAt = catalogCached ? cachedAt : '';
+    state.communityCatalog.cacheStatus = catalogCached ? 'ready' : 'error';
+    if (catalogCached) void pruneCommunityCache(catalog);
   } catch (error) {
     if (hadCachedCatalog || state.communityCatalog.status === 'ready') {
       state.communityCatalog.status = 'ready';
@@ -2805,7 +2829,9 @@ async function preloadCommunityUsage(profiles) {
   const results = await Promise.all(profiles.map(async (item) => {
     try {
       state.communityCatalog.usageById[item.id] = await fetchCommunityProfile(item);
-      return true;
+      const persisted = Boolean(await communityProfileFromCache(item));
+      if (persisted) state.communityCatalog.cachedProfiles += 1;
+      return persisted;
     } catch {
       // Keep the card visible even if an optional usage preload fails.
       return false;
@@ -2814,17 +2840,18 @@ async function preloadCommunityUsage(profiles) {
       if (state.communityCatalog.open) render();
     }
   }));
-  return results.every(Boolean);
+  return results.filter(Boolean).length;
 }
 
 async function fetchAndCacheCommunityImage(item) {
-  if (!item.imageUrl) return;
+  if (!item.imageUrl) return false;
   const imageUrl = communityAssetUrl(item.imageUrl);
-  if (!imageUrl || state.communityCatalog.imageDataByUrl[imageUrl]) return;
+  if (!imageUrl) return false;
+  if (state.communityCatalog.imageDataByUrl[imageUrl]) return true;
   const cached = await communityCacheGet(`image:${imageUrl}`);
   if (typeof cached?.dataUrl === 'string' && cached.dataUrl.startsWith('data:image/')) {
     state.communityCatalog.imageDataByUrl[imageUrl] = cached.dataUrl;
-    return;
+    return true;
   }
 
   const controller = new AbortController();
@@ -2833,18 +2860,29 @@ async function fetchAndCacheCommunityImage(item) {
     const response = await fetch(imageUrl, {cache: 'no-store', signal: controller.signal});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const blob = await response.blob();
-    if (!blob.type.startsWith('image/') || blob.size > COMMUNITY_IMAGE_MAX_BYTES * 2) return;
+    if (!blob.type.startsWith('image/') || blob.size > COMMUNITY_IMAGE_MAX_BYTES * 2) return false;
     const dataUrl = await blobDataUrl(blob);
     state.communityCatalog.imageDataByUrl[imageUrl] = dataUrl;
-    await communityCachePut(`image:${imageUrl}`, {dataUrl});
+    return await communityCachePut(`image:${imageUrl}`, {dataUrl});
   } finally {
     window.clearTimeout(timeout);
   }
 }
 
 async function preloadCommunityImages(profiles) {
-  await Promise.all(profiles.map((item) => fetchAndCacheCommunityImage(item).catch(() => {})));
+  const results = await Promise.all(profiles.map(async (item) => {
+    try {
+      const persisted = await fetchAndCacheCommunityImage(item);
+      if (persisted) state.communityCatalog.cachedImages += 1;
+      return persisted;
+    } catch {
+      return false;
+    } finally {
+      if (state.communityCatalog.open) render();
+    }
+  }));
   if (state.communityCatalog.open) render();
+  return results.filter(Boolean).length;
 }
 
 function communityFilteredProfiles() {
@@ -3099,6 +3137,9 @@ function renderCommunityCatalog() {
         <button class="secondary" type="button" data-action="community-catalog-refresh">${t('community.catalog.refresh')}</button>
       </div>
       <div class="community-catalog-summary"><span id="community-catalog-count">${t('community.catalog.resultCount', {count: communityFilteredProfiles().length})}</span>${state.communityCatalog.generatedAt ? `<span>${t('community.catalog.updatedAt', {date: new Date(state.communityCatalog.generatedAt).toLocaleString()})}</span>` : ''}</div>
+      ${state.communityCatalog.cacheStatus === 'saving' ? `<div class="community-cache-status saving">${t('community.catalog.cacheSaving', {cached: state.communityCatalog.cachedProfiles, total: state.communityCatalog.cacheTotal})}</div>` : ''}
+      ${state.communityCatalog.cacheStatus === 'ready' ? `<div class="community-cache-status ready">${t('community.catalog.cacheReady', {cached: state.communityCatalog.cachedProfiles, total: state.communityCatalog.cacheTotal, images: state.communityCatalog.cachedImages})}</div>` : ''}
+      ${state.communityCatalog.cacheStatus === 'error' ? `<div class="community-cache-status error">${t('community.catalog.cacheError')}</div>` : ''}
       <div id="community-catalog-list" class="community-catalog-list">${renderCommunityProfileCards()}</div>` : ''}
     </section>
   </div>`;

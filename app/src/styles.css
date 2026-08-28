@@ -535,6 +535,17 @@ button:disabled {
   margin: 12px 0;
 }
 
+.community-cache-status {
+  border-radius: 7px;
+  font-size: 13px;
+  margin: -2px 0 12px;
+  padding: 8px 10px;
+}
+
+.community-cache-status.saving { background: #eff6ff; color: #1d4ed8; }
+.community-cache-status.ready { background: #ecfdf5; color: #047857; }
+.community-cache-status.error { background: #fef2f2; color: #b42318; }
+
 .community-catalog-list {
   display: grid;
   gap: 12px;
