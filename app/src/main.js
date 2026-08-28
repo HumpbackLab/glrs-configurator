@@ -665,6 +665,9 @@ function renderNumGridRow(prefix, rowLabel, colCount, values, rowIndex, disabled
   const flagCell = options.flagName
     ? `<td class="grid-check-cell"><input type="checkbox" name="${escapeHtml(options.flagName)}-${rowIndex}" ${checked(Boolean(options.flagValues?.[rowIndex]))} ${disabled}></td>`
     : '';
+  const removeCell = options.removeRows
+    ? `<td class="grid-remove-cell"><button class="icon-button grid-remove-button" type="button" data-remove-mixer-row="${rowIndex}" aria-label="${escapeHtml(t('action.removeOutput'))}">−</button></td>`
+    : '';
   return `
     <tr>
       <th scope="row">${escapeHtml(rowLabel)}</th>
@@ -673,6 +676,7 @@ function renderNumGridRow(prefix, rowLabel, colCount, values, rowIndex, disabled
         return `<td><input type="number" step="any" inputmode="decimal" data-grid="${prefix}" data-row="${rowIndex}" data-col="${colIndex}" value="${escapeHtml(numCellValue(values, index))}" ${disabled}></td>`;
       }).join('')}
       ${flagCell}
+      ${removeCell}
     </tr>`;
 }
 
@@ -687,6 +691,7 @@ function renderNumGrid(prefix, rowLabels, colLabels, values, options = {}) {
             <th>${escapeHtml(options.rowHeader || '')}</th>
             ${colLabels.map((label) => `<th>${escapeHtml(label)}</th>`).join('')}
             ${options.flagName ? `<th>${escapeHtml(options.flagLabel || '')}</th>` : ''}
+            ${options.removeRows ? `<th>${escapeHtml(t('action.removeOutput'))}</th>` : ''}
           </tr>
         </thead>
         <tbody>
@@ -3600,10 +3605,12 @@ function motorCount() {
 function changeMixerRowCount(delta) {
   const tbody = document.querySelector('#flight-form [data-grid-table="fc_mixer"] tbody');
   if (!tbody) return;
+  const currentCount = motorCount();
+  const nextCount = Math.max(0, currentCount + delta);
+  if (nextCount === currentCount) return;
 
   if (delta > 0) {
-    const rowIndex = motorCount();
-    state.extraMixerRows = (state.extraMixerRows || 0) + 1;
+    const rowIndex = currentCount;
     tbody.insertAdjacentHTML('beforeend', renderNumGridRow(
       'fc_mixer',
       `${t('flight.output')} ${rowIndex + 1}`,
@@ -3613,18 +3620,38 @@ function changeMixerRowCount(delta) {
       '',
       {flagName: 'fc-mixer-servo', flagValues: []},
     ));
-  } else if (state.extraMixerRows > 0) {
+  } else {
     tbody.lastElementChild?.remove();
-    state.extraMixerRows -= 1;
   }
+  state.extraMixerRows = (state.extraMixerRows || 0) + delta;
 
-  const motors = motorCount();
+  const motors = nextCount;
   const countLabel = document.querySelector('#mixer-motor-count');
   if (countLabel) {
     countLabel.textContent = `${motors} ${motors !== 1 ? t('flight.outputs') : t('flight.output')}`;
   }
-  const removeButton = document.querySelector('[data-action="remove-motor"]');
-  if (removeButton) removeButton.disabled = state.busy || state.extraMixerRows <= 0;
+}
+
+function removeMixerRow(rowIndex) {
+  const tbody = document.querySelector('#flight-form [data-grid-table="fc_mixer"] tbody');
+  const rows = tbody ? [...tbody.querySelectorAll('tr')] : [];
+  if (!tbody || !Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= rows.length) return;
+  rows[rowIndex].remove();
+  state.extraMixerRows = (state.extraMixerRows || 0) - 1;
+  [...tbody.querySelectorAll('tr')].forEach((row, index) => {
+    const header = row.querySelector('th');
+    if (header) header.textContent = `${t('flight.output')} ${index + 1}`;
+    row.querySelectorAll('[data-grid="fc_mixer"]').forEach((input) => {
+      input.dataset.row = String(index);
+    });
+    const servo = row.querySelector('[name^="fc-mixer-servo-"]');
+    if (servo) servo.name = `fc-mixer-servo-${index}`;
+    const remove = row.querySelector('[data-remove-mixer-row]');
+    if (remove) remove.dataset.removeMixerRow = String(index);
+  });
+  const motors = motorCount();
+  const countLabel = document.querySelector('#mixer-motor-count');
+  if (countLabel) countLabel.textContent = `${motors} ${motors !== 1 ? t('flight.outputs') : t('flight.output')}`;
 }
 
 function deg(rad) { return rad * 180 / Math.PI; }
@@ -3982,12 +4009,12 @@ function renderFlight() {
             flagName: 'fc-mixer-servo',
             flagLabel: t('flight.isServo'),
             flagValues: mixerServos,
+            removeRows: true,
           })}
           <div class="helper">${t('flight.mixerServoHelp')}</div>
           <div class="helper" id="mixer-motor-count">${motors} ${motors !== 1 ? t('flight.outputs') : t('flight.output')}</div>
           <div class="actions">
             <button class="secondary" type="button" data-action="add-motor" ${state.busy ? 'disabled' : ''}>${t('action.addOutput')}</button>
-            <button class="secondary" type="button" data-action="remove-motor" ${state.busy || state.extraMixerRows <= 0 ? 'disabled' : ''}>${t('action.removeOutput')}</button>
           </div>
           </div>
         </section>
@@ -4870,6 +4897,10 @@ function wireEvents() {
   document.querySelector('#model-form')?.addEventListener('submit', saveModel);
   document.querySelector('#pwm-form')?.addEventListener('submit', savePwm);
   document.querySelector('#flight-form')?.addEventListener('submit', saveFlight);
+  document.querySelector('#flight-form')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-remove-mixer-row]');
+    if (button) removeMixerRow(Number(button.dataset.removeMixerRow));
+  });
   document.querySelectorAll('[data-beginner-sensitivity]').forEach((input) => {
     input.addEventListener('input', () => {
       const output = document.querySelector(`[data-beginner-sensitivity-output="${input.dataset.beginnerSensitivity}"]`);
@@ -4996,7 +5027,6 @@ function wireEvents() {
       if (action === 'access-point') postPlain('/access', t('message.switchingAp'));
       if (action === 'forget') postPlain('/forget', t('message.networkForgotten'));
       if (action === 'add-motor') changeMixerRowCount(1);
-      if (action === 'remove-motor') changeMixerRowCount(-1);
       if (action === 'orientation-next') void captureOrientationFace();
       if (action === 'orientation-reset') resetOrientationCalibration();
       if (action === 'accel-next') void captureCurrentAccelFace();
