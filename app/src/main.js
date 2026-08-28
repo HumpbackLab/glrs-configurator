@@ -1203,11 +1203,25 @@ function beginnerGuideConfig() {
 async function completeBeginnerGuide() {
   await runBusy(async () => {
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(beginnerGuideConfig())});
+    const importedState = {
+      profileDraft: state.profileDraft,
+      profileOriginal: state.profileOriginal,
+      profileCompatibility: state.profileCompatibility,
+      profileImportError: state.profileImportError,
+    };
     state.profileDraft = null;
     state.profileOriginal = null;
     state.profileCompatibility = null;
     state.profileImportError = '';
-    await loadDevice();
+    try {
+      await loadDevice();
+    } catch (error) {
+      state.profileDraft = importedState.profileDraft;
+      state.profileOriginal = importedState.profileOriginal;
+      state.profileCompatibility = importedState.profileCompatibility;
+      state.profileImportError = importedState.profileImportError;
+      throw error;
+    }
     state.beginnerGuide = {active: false, step: 0};
     state.tab = 'status';
   }, t('beginnerGuide.complete'));
