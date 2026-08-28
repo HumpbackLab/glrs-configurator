@@ -1129,13 +1129,6 @@ function beginnerRatePidFromLevels(levels, reversed = [], servoDebounce = []) {
   return ratePid;
 }
 
-function beginnerRatePidFromImportedRatePid(ratePid) {
-  const levels = [0, 1, 2].map((axis) => beginnerSensitivityLevel(ratePid?.[axis * 4]));
-  const reversed = [0, 1, 2].map((axis) => Number(ratePid?.[axis * 4]) < 0);
-  const servoDebounce = [0, 1, 2].map((axis) => Number(ratePid?.[axis * 4 + 2]) === 0);
-  return beginnerRatePidFromLevels(levels, reversed, servoDebounce);
-}
-
 function readBeginnerRatePid(form) {
   const levels = [0, 1, 2].map((axis) =>
     intOrDefault(form.elements[`beginner-sensitivity-${axis}`]?.value, 5));
@@ -1148,8 +1141,6 @@ function readBeginnerRatePid(form) {
 
 function startBeginnerGuide() {
   if (state.busy) return;
-  state.beginnerMode = true;
-  persistMode();
   state.beginnerGuide = {active: true, step: 1};
   state.tab = 'status';
   state.message = null;
@@ -1158,8 +1149,6 @@ function startBeginnerGuide() {
 
 function cancelBeginnerGuide() {
   state.beginnerGuide = {active: false, step: 0};
-  state.beginnerMode = false;
-  persistMode();
   state.communityCatalog.open = false;
   state.message = null;
   render();
@@ -1171,7 +1160,6 @@ function beginnerGuideConfig() {
   const payload = {
     ...config(),
     ...flight,
-    fc_rate_pid: beginnerRatePidFromImportedRatePid(flight.fc_rate_pid),
     fc_orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4),
   };
   delete payload.fc_mixer_count;
@@ -1191,8 +1179,6 @@ async function completeBeginnerGuide() {
     state.profileCompatibility = null;
     state.profileImportError = '';
     await loadDevice();
-    state.beginnerMode = true;
-    persistMode();
     state.beginnerGuide = {active: false, step: 0};
     state.tab = 'status';
   }, t('beginnerGuide.complete'));
@@ -2849,8 +2835,6 @@ async function handleCommunityProfileAction(action, id) {
     if (state.beginnerGuide.active) {
       state.beginnerGuide.step = 2;
       state.tab = 'status';
-      state.beginnerMode = true;
-      persistMode();
     }
     applyImportedProfile(profile);
   } catch (error) {
