@@ -1045,7 +1045,7 @@ button:disabled {
   align-items: stretch;
   display: grid;
   gap: 14px;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  grid-template-columns: minmax(520px, 1.6fr) minmax(180px, 0.4fr);
 }
 
 .orientation-results-layout > * {
@@ -1053,6 +1053,7 @@ button:disabled {
 }
 
 .orientation-results .grid-table {
+  min-width: 520px;
   table-layout: fixed;
 }
 
@@ -1066,8 +1067,14 @@ button:disabled {
 
 .orientation-results .grid-table input {
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  min-width: 110px;
   padding-left: 2px;
   padding-right: 2px;
+}
+
+@media (max-width: 1100px) {
+  .orientation-results-layout { grid-template-columns: minmax(0, 1fr); }
 }
 
 .debug-aircraft-panel {
