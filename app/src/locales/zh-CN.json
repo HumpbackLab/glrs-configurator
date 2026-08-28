@@ -2,8 +2,8 @@
   "app": {
     "title": "Gyro ELRS 配置工具",
     "beginnerGuide": "新手引导",
-    "beginnerMode": "新手模式",
-    "beginnerModeHelp": "开启后，飞控页面只显示飞控安装方向校准"
+    "expertMode": "专家模式",
+    "expertModeHelp": "开启后显示完整配置功能"
   },
   "tab": {
     "status": "状态",
@@ -249,9 +249,9 @@
     "isServo": "舵机",
     "mixerServoHelp": "勾选舵机后，零混控输入以中位为基准；未勾选时按电机从最小油门开始。舵机不受解锁开关关闭影响。",
     "boardOrientation": "飞控安装方向",
-    "roll": "Roll",
-    "pitch": "Pitch",
-    "yaw": "Yaw",
+    "roll": "横滚",
+    "pitch": "俯仰",
+    "yaw": "偏航",
     "kp": "Kp",
     "ki": "Ki",
     "kd": "Kd",

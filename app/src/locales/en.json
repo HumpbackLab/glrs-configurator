@@ -2,8 +2,8 @@
   "app": {
     "title": "Gyro ELRS Configurator",
     "beginnerGuide": "Beginner guide",
-    "beginnerMode": "Beginner mode",
-    "beginnerModeHelp": "Show only board orientation calibration on the Flight page"
+    "expertMode": "Expert mode",
+    "expertModeHelp": "Show the full configuration interface"
   },
   "tab": {
     "status": "Status",

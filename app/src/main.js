@@ -7,7 +7,7 @@ const DEFAULT_API = 'http://10.0.0.1';
 const API_STORAGE_KEY = 'elrs-local-rx-api';
 const LOCAL_PROXY_PATH = '/__elrs_proxy__';
 const UPDATE_SOURCE_STORAGE_KEY = 'elrs-app-update-source';
-const BEGINNER_MODE_STORAGE_KEY = 'elrs-beginner-mode';
+const EXPERT_MODE_STORAGE_KEY = 'elrs-expert-mode';
 const BEGINNER_RATE_PID_BASE = [
   2, 0.6, 0.05, 50,
   2, 0.6, 0.05, 50,
@@ -34,7 +34,11 @@ function loadUpdateSource() {
 }
 
 function loadBeginnerMode() {
-  return localStorage.getItem(BEGINNER_MODE_STORAGE_KEY) === '1';
+  return localStorage.getItem(EXPERT_MODE_STORAGE_KEY) !== '1';
+}
+
+function persistMode() {
+  localStorage.setItem(EXPERT_MODE_STORAGE_KEY, state.beginnerMode ? '0' : '1');
 }
 
 const state = {
@@ -1150,7 +1154,7 @@ function startBeginnerGuide() {
 
 function cancelBeginnerGuide() {
   state.beginnerGuide = {active: false, step: 0};
-  state.beginnerMode = true;
+  state.beginnerMode = false;
   persistMode();
   state.communityCatalog.open = false;
   state.message = null;
@@ -1184,7 +1188,7 @@ async function completeBeginnerGuide() {
     state.profileImportError = '';
     await loadDevice();
     state.beginnerMode = true;
-    localStorage.setItem(BEGINNER_MODE_STORAGE_KEY, '1');
+    persistMode();
     state.beginnerGuide = {active: false, step: 0};
     state.tab = 'status';
   }, t('beginnerGuide.complete'));
@@ -2828,7 +2832,7 @@ async function handleCommunityProfileAction(action, id) {
       state.beginnerGuide.step = 2;
       state.tab = 'status';
       state.beginnerMode = true;
-      localStorage.setItem(BEGINNER_MODE_STORAGE_KEY, '1');
+      persistMode();
     }
     applyImportedProfile(profile);
   } catch (error) {
@@ -4374,9 +4378,9 @@ function render() {
       <header class="topbar">
         <div class="brand"><h1>${t('app.title')}</h1></div>
         <button class="secondary beginner-guide-button" type="button" data-action="beginner-guide-start" ${state.busy ? 'disabled' : ''}>${t('app.beginnerGuide')}</button>
-        <label class="beginner-mode-toggle" title="${escapeHtml(t('app.beginnerModeHelp'))}">
-          <input type="checkbox" data-beginner-mode ${checked(state.beginnerMode)}>
-          <span>${t('app.beginnerMode')}</span>
+        <label class="beginner-mode-toggle" title="${escapeHtml(t('app.expertModeHelp'))}">
+          <input type="checkbox" data-expert-mode ${checked(!state.beginnerMode)}>
+          <span>${t('app.expertMode')}</span>
         </label>
         <div class="connection-status is-${state.connectionStatus}" title="${escapeHtml(apiBaseHost())}"><span></span><strong>${escapeHtml(connectionStatusLabel())}</strong></div>
         <select class="lang-switch" aria-label="${t('lang.label')}">
@@ -4403,9 +4407,9 @@ function render() {
 }
 
 function wireEvents() {
-  document.querySelector('[data-beginner-mode]')?.addEventListener('change', (event) => {
-    state.beginnerMode = event.target.checked;
-    localStorage.setItem(BEGINNER_MODE_STORAGE_KEY, state.beginnerMode ? '1' : '0');
+  document.querySelector('[data-expert-mode]')?.addEventListener('change', (event) => {
+    state.beginnerMode = !event.target.checked;
+    persistMode();
     render();
   });
 
