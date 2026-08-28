@@ -23,6 +23,8 @@ const PROFILE_SUBMISSION_API = import.meta.env.VITE_PROFILE_SUBMISSION_URL
 const PROFILE_CATALOG_API = import.meta.env.VITE_PROFILE_CATALOG_URL
   || 'https://share.humpbacklab.com/catalog.json';
 const AIRCRAFT_MODEL_URL = `${import.meta.env.BASE_URL}models/model_rudderless_plane.gltf`;
+const COMMUNITY_IMAGE_MAX_BYTES = 120 * 1024;
+const COMMUNITY_IMAGE_MAX_DIMENSION = 800;
 
 function defaultUpdateSource() {
   return getLocale() === 'zh-CN' ? 'gitee' : 'github';
@@ -122,6 +124,8 @@ const state = {
     open: false,
     profile: null,
     fileName: '',
+    imageDataUrl: '',
+    imageFileName: '',
     result: null,
   },
   communityCatalog: {
@@ -2584,6 +2588,10 @@ function validateCommunityCatalog(value) {
       || typeof item.profileUrl !== 'string' || !/^[a-f0-9]{64}$/i.test(item.sha256 || '')) {
       throw new Error(t('error.communityCatalogInvalid'));
     }
+    if (item.imageUrl !== undefined
+      && (typeof item.imageUrl !== 'string' || !item.imageUrl.startsWith('./profiles/'))) {
+      throw new Error(t('error.communityCatalogInvalid'));
+    }
   });
   return value;
 }
@@ -2649,6 +2657,14 @@ function communityVehicleTypes() {
   return [...new Set(state.communityCatalog.profiles.map(communityVehicleType).filter(Boolean))].sort();
 }
 
+function communityAssetUrl(path) {
+  try {
+    return new URL(path, PROFILE_CATALOG_API).href;
+  } catch {
+    return '';
+  }
+}
+
 function renderCommunityProfileCards() {
   const profiles = communityFilteredProfiles();
   if (!profiles.length) return `<div class="community-catalog-empty">${t('community.catalog.empty')}</div>`;
@@ -2658,11 +2674,13 @@ function renderCommunityProfileCards() {
     const compatible = Boolean(currentTarget && item.target && currentTarget === item.target);
     const usage = communityUsageInstructions(state.communityCatalog.usageById[item.id]);
     const usageLoading = Boolean(state.communityCatalog.usageLoadingById[item.id]);
+    const imageUrl = item.imageUrl ? communityAssetUrl(item.imageUrl) : '';
     return `<article class="community-profile-card">
       <div class="community-profile-heading">
         <div><h3>${escapeHtml(item.title)}</h3><span>${escapeHtml(item.authorName || t('value.unknown'))}</span></div>
         ${compatible ? `<span class="community-compatible">${t('community.catalog.compatible')}</span>` : ''}
       </div>
+      ${imageUrl ? `<img class="community-profile-image" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(item.title)}" loading="lazy">` : ''}
       <div class="community-profile-meta">
         <span>${t('community.catalog.target')}: <strong>${escapeHtml(item.target || t('value.unknown'))}</strong></span>
         <span>${t('community.catalog.pwm')}: <strong>${escapeHtml(item.profileSummary?.pwmOutputCount ?? 0)}</strong></span>
@@ -2876,12 +2894,16 @@ function renderCommunityCatalog() {
 }
 
 function openCommunitySubmission() {
-  state.communitySubmission = {open: true, profile: null, fileName: '', result: state.communitySubmission.result};
+  state.communitySubmission = {
+    open: true, profile: null, fileName: '', imageDataUrl: '', imageFileName: '', result: state.communitySubmission.result,
+  };
   render();
 }
 
 function closeCommunitySubmission() {
-  state.communitySubmission = {...state.communitySubmission, open: false, profile: null, fileName: ''};
+  state.communitySubmission = {
+    ...state.communitySubmission, open: false, profile: null, fileName: '', imageDataUrl: '', imageFileName: '',
+  };
   render();
 }
 
@@ -2901,6 +2923,72 @@ async function selectCommunityProfile(file) {
   if (preview) {
     preview.className = 'submission-profile-preview ready';
     preview.innerHTML = `<strong>${escapeHtml(file.name)}</strong><span>${escapeHtml(t('community.profileSummary', summary))}</span>`;
+  }
+}
+
+function blobDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error || new Error('image_read_failed'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function loadImageElement(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(t('error.communityImageInvalid')));
+    };
+    image.src = url;
+  });
+}
+
+function canvasBlob(canvas, type, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error(t('error.communityImageInvalid'))), type, quality);
+  });
+}
+
+async function compressCommunityImage(file) {
+  if (!file || !file.type.startsWith('image/')) throw new Error(t('error.communityImageInvalid'));
+  const image = await loadImageElement(file);
+  const scale = Math.min(1, COMMUNITY_IMAGE_MAX_DIMENSION / Math.max(image.naturalWidth, image.naturalHeight));
+  const dimensions = [
+    Math.max(1, Math.round(image.naturalWidth * scale)),
+    Math.max(1, Math.round(image.naturalHeight * scale)),
+  ];
+  const canvas = document.createElement('canvas');
+  canvas.width = dimensions[0];
+  canvas.height = dimensions[1];
+  canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+  let blob;
+  for (const quality of [0.82, 0.72, 0.62, 0.52, 0.42]) {
+    blob = await canvasBlob(canvas, 'image/webp', quality);
+    if (blob.size <= COMMUNITY_IMAGE_MAX_BYTES) break;
+  }
+  if (!blob || blob.size > COMMUNITY_IMAGE_MAX_BYTES) {
+    throw new Error(t('error.communityImageTooLarge'));
+  }
+  return {dataUrl: await blobDataUrl(blob), size: blob.size};
+}
+
+async function selectCommunityImage(file) {
+  if (!file) return;
+  const result = await compressCommunityImage(file);
+  state.communitySubmission.imageDataUrl = result.dataUrl;
+  state.communitySubmission.imageFileName = file.name;
+  const preview = document.querySelector('#community-image-preview');
+  if (preview) {
+    preview.className = 'submission-image-preview ready';
+    preview.innerHTML = `<img src="${escapeHtml(result.dataUrl)}" alt=""><span>${escapeHtml(file.name)} · ${(result.size / 1024).toFixed(1)} KB</span>`;
   }
 }
 
@@ -2938,6 +3026,7 @@ async function submitCommunityProfile(event) {
     contact: {phone: String(data.get('phone') || '').trim()},
     consent: {share: true, safetyAcknowledged: true},
     profile: state.communitySubmission.profile,
+    ...(state.communitySubmission.imageDataUrl ? {image: {dataUrl: state.communitySubmission.imageDataUrl}} : {}),
   };
 
   errorBox.textContent = '';
@@ -2954,7 +3043,7 @@ async function submitCommunityProfile(event) {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.message || `${response.status} ${response.statusText}`);
-    state.communitySubmission = {open: false, profile: null, fileName: '', result};
+    state.communitySubmission = {open: false, profile: null, fileName: '', imageDataUrl: '', imageFileName: '', result};
     state.message = {type: 'ok', text: t('message.communitySubmitted', {number: result.pullRequestNumber})};
     render();
   } catch (error) {
@@ -2978,6 +3067,7 @@ function renderCommunitySubmission() {
         <form id="community-submission-form">
           <div class="row"><label for="community-profile-file">${t('community.profileFile')} *</label><input id="community-profile-file" name="profileFile" type="file" accept="application/json,.json" required></div>
           <div id="community-profile-preview" class="submission-profile-preview">${t('community.selectProfileHint')}</div>
+          <div class="row"><label for="community-image-file">${t('community.imageFile')}</label><input id="community-image-file" name="imageFile" type="file" accept="image/jpeg,image/png,image/webp"><div class="helper">${t('community.imageHelp')}</div><div id="community-image-preview" class="submission-image-preview">${t('community.imageNone')}</div></div>
           <div class="row"><label for="community-phone">${t('community.phone')}</label><input id="community-phone" name="phone" type="tel" autocomplete="tel" maxlength="32" placeholder="+86 138 0000 0000"><div class="helper">${t('community.phonePrivacy')}</div></div>
           <div class="row"><label for="community-title">${t('community.title')} *</label><input id="community-title" name="title" minlength="3" maxlength="80" required></div>
           <div class="row"><label for="community-summary">${t('community.summary')}</label><textarea id="community-summary" name="summary" maxlength="500"></textarea></div>
@@ -4506,6 +4596,23 @@ function wireEvents() {
     } catch (error) {
       state.communitySubmission.profile = null;
       state.communitySubmission.fileName = '';
+      if (errorBox) errorBox.textContent = error.message || String(error);
+      event.target.value = '';
+    }
+  });
+  document.querySelector('#community-image-file')?.addEventListener('change', async (event) => {
+    const errorBox = document.querySelector('.submission-error');
+    try {
+      if (errorBox) errorBox.textContent = '';
+      await selectCommunityImage(event.target.files?.[0]);
+    } catch (error) {
+      state.communitySubmission.imageDataUrl = '';
+      state.communitySubmission.imageFileName = '';
+      const preview = document.querySelector('#community-image-preview');
+      if (preview) {
+        preview.className = 'submission-image-preview';
+        preview.textContent = t('community.imageNone');
+      }
       if (errorBox) errorBox.textContent = error.message || String(error);
       event.target.value = '';
     }

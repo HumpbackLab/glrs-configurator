@@ -98,6 +98,9 @@
     "description": "Choose a previously exported profile. Submission needs internet access but does not require a receiver connection.",
     "profileFile": "Local profile file",
     "selectProfileHint": "Choose a Gyro ELRS profile JSON file",
+    "imageFile": "Aircraft image (optional)",
+    "imageHelp": "It will be compressed to a small WebP image, up to about 120 KB.",
+    "imageNone": "No aircraft image selected",
     "profileSummary": "Target: {target} · PWM: {pwmOutputs} · Motors: {motors}",
     "phone": "Phone number (optional)",
     "phonePrivacy": "This will let a future user system associate the submitted profile with your account. It is never written to the public profile or GitHub PR. You may leave it blank for privacy, but you will not be able to claim this profile later.",
@@ -511,7 +514,9 @@
     "communityProfileTooLarge": "The community profile file is too large",
     "communityProfileIntegrity": "The community profile failed SHA-256 verification; refresh the catalog and try again",
     "communityProfileInvalid": "The community profile does not match its catalog entry",
-    "communityProfileTimeout": "Downloading the community profile timed out; check your internet connection"
+    "communityProfileTimeout": "Downloading the community profile timed out; check your internet connection",
+    "communityImageInvalid": "Choose a valid image file",
+    "communityImageTooLarge": "The image is still too large after compression; choose a smaller image"
   },
   "pidlog": {
     "heading": "PID plots",

@@ -487,6 +487,22 @@ button:disabled {
   color: #245e52;
 }
 
+.submission-image-preview {
+  align-items: center;
+  background: #f5f7fa;
+  border: 1px dashed #c9d2dc;
+  border-radius: 6px;
+  color: #64748b;
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+  min-height: 44px;
+  padding: 6px 10px;
+}
+
+.submission-image-preview.ready { border-color: #8cc8ba; }
+.submission-image-preview img { border-radius: 4px; height: 56px; object-fit: contain; width: 80px; }
+
 .submission-error {
   color: #b42318;
   font-size: 13px;
@@ -572,6 +588,17 @@ button:disabled {
   flex: 0 0 auto;
   font-weight: 700;
   padding: 4px 8px;
+}
+
+.community-profile-image {
+  background: #eef2f5;
+  border-radius: 8px;
+  display: block;
+  height: 180px;
+  margin: 12px 0;
+  object-fit: contain;
+  padding: 6px;
+  width: 100%;
 }
 
 .community-profile-meta {

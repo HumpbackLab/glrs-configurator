@@ -98,6 +98,9 @@
     "description": "选择之前导出的配置文件。投稿需要互联网，但不需要连接接收机。",
     "profileFile": "本地配置文件",
     "selectProfileHint": "请选择 Gyro ELRS 配置 JSON",
+    "imageFile": "飞机图片（选填）",
+    "imageHelp": "将自动压缩为较小的 WebP 图片，最大约 120 KB。",
+    "imageNone": "未选择飞机图片",
     "profileSummary": "目标：{target} · PWM：{pwmOutputs} · 电机：{motors}",
     "phone": "手机号（选填）",
     "phonePrivacy": "用于未来用户系统认领你投稿的配置。手机号不会写入公开配置或 GitHub PR；如果担心信息泄露可以留空，但后续将无法认领该配置。",
@@ -511,7 +514,9 @@
     "communityProfileTooLarge": "社区配置文件过大",
     "communityProfileIntegrity": "社区配置 SHA-256 校验失败，请刷新目录后重试",
     "communityProfileInvalid": "社区配置文件与目录信息不一致",
-    "communityProfileTimeout": "下载社区配置超时，请检查互联网连接"
+    "communityProfileTimeout": "下载社区配置超时，请检查互联网连接",
+    "communityImageInvalid": "请选择有效的图片文件",
+    "communityImageTooLarge": "图片压缩后仍然过大，请选择更小的图片"
   },
   "pidlog": {
     "heading": "PID 波形",
