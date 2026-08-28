@@ -370,8 +370,6 @@
   },
   "orient": {
     "heading": "Two-face Board Orientation Calibration",
-    "description": "Identify the nearest 90° board orientation, then use the level pose for continuous roll and pitch correction.",
-    "safety": "Remove the propellers and secure the flight controller. For the first top-up step, the complete aircraft must rest normally on a level table or level ground—do not hold it or follow only the arrow printed on the controller.",
     "progress": "{done}/2 faces",
     "topUp": "Top up (level)",
     "noseUp": "Nose up",
@@ -385,12 +383,8 @@
     "ready": "Both faces are captured. Horizon correction: roll={roll}°, pitch={pitch}°. Review the installation angles below.",
     "eulerResult": "Installation angles (°)",
     "installAngle": "Read-only result",
-    "resultReadOnly": "Calculated from the orientation matrix; read-only",
     "poseTitle": "Current Placement",
-    "poseCanvasLabel": "3D aircraft placement for {face}",
-    "topUpPoseHelp": "The complete aircraft must rest normally on a level table or level ground, top up. Do not calibrate while holding it.",
-    "noseUpPoseHelp": "Secure the aircraft on its tail with the nose pointing vertically upward and keep it still.",
-    "saveHelp": "Yaw uses the nearest 90° orientation; roll and pitch use continuous horizon correction. Reboot before running six-face accelerometer calibration."
+    "poseCanvasLabel": "3D aircraft placement for {face}"
   },
   "imuCalibration": {
     "heading": "IMU Calibration",

@@ -1140,8 +1140,8 @@ function readBeginnerRatePid(form) {
 
 function startBeginnerGuide() {
   if (state.busy) return;
-  state.beginnerMode = false;
-  localStorage.setItem(BEGINNER_MODE_STORAGE_KEY, '0');
+  state.beginnerMode = true;
+  persistMode();
   state.beginnerGuide = {active: true, step: 1};
   state.tab = 'status';
   state.message = null;
@@ -1150,8 +1150,8 @@ function startBeginnerGuide() {
 
 function cancelBeginnerGuide() {
   state.beginnerGuide = {active: false, step: 0};
-  state.beginnerMode = false;
-  localStorage.setItem(BEGINNER_MODE_STORAGE_KEY, '0');
+  state.beginnerMode = true;
+  persistMode();
   state.communityCatalog.open = false;
   state.message = null;
   render();
@@ -3425,10 +3425,9 @@ function renderOrientationCalibration(installEuler) {
       <div class="orientation-calibration-layout">
         <section class="imu-cal-card orientation-cal-card ${calibration.busy ? 'is-calibrating' : ''}">
           <div class="imu-card-heading">
-            <div><h3>${t('orient.heading')}</h3><p>${t('orient.description')}</p></div>
+            <div><h3>${t('orient.heading')}</h3></div>
             <span class="cal-progress">${t('orient.progress', {done: completed})}</span>
           </div>
-          <div class="notice">${t('orient.safety')}</div>
           <div class="imu-step-hint">${escapeHtml(hint)}</div>
           <div class="imu-face-actions">${faceStatus}</div>
           <div class="actions"><button class="primary" type="button" data-action="orientation-next" ${state.busy || calibration.busy || state.imuCalibration.busy || nextIndex < 0 ? 'disabled' : ''}>${t('orient.capture')}</button><button class="secondary" type="button" data-action="orientation-reset" ${state.busy || calibration.busy || state.imuCalibration.busy ? 'disabled' : ''}>${t('orient.reset')}</button></div>
@@ -3439,11 +3438,10 @@ function renderOrientationCalibration(installEuler) {
           <div id="orientation-aircraft-wrapper" class="orientation-aircraft-wrapper">
             <canvas id="orientation-aircraft-canvas" aria-label="${escapeHtml(t('orient.poseCanvasLabel', {face: t(poseStep.label)}))}"></canvas>
           </div>
-          <div class="helper">${t(poseStepIndex === 0 ? 'orient.topUpPoseHelp' : 'orient.noseUpPoseHelp')}</div>
         </aside>
       </div>
       <section class="orientation-results-card">
-        <div class="orientation-results-heading"><strong>${t('orient.eulerResult')}</strong><span>${t('orient.resultReadOnly')}</span></div>
+        <div class="orientation-results-heading"><strong>${t('orient.eulerResult')}</strong></div>
         <div class="orientation-results-layout">
           <div class="imu-cal-results orientation-results">
             <div>${renderNumGrid('orientation-euler-result', [t('orient.installAngle')], [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], installEuler, {rowHeader: t('flight.axis'), disabled: true})}</div>
@@ -3459,7 +3457,6 @@ function renderOrientationCalibration(installEuler) {
             </div>
           </div>
         </div>
-        <div class="helper">${t('orient.saveHelp')}</div>
       </section>
     </div>`;
 }
