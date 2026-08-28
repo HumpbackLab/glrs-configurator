@@ -3805,6 +3805,10 @@ function renderOrientationCalibration(installEuler) {
     });
   const poseStepIndex = nextIndex >= 0 ? nextIndex : ORIENTATION_CAL_STEPS.length - 1;
   const poseStep = ORIENTATION_CAL_STEPS[poseStepIndex];
+  const resultValues = installEuler.map((value) => {
+    const rounded = Math.round(Number(value) * 10) / 10;
+    return (Object.is(rounded, -0) ? 0 : rounded).toFixed(1);
+  });
   return `
     <div class="orientation-editor">
       <div class="orientation-calibration-layout">
@@ -3829,7 +3833,13 @@ function renderOrientationCalibration(installEuler) {
         <div class="orientation-results-heading"><strong>${t('orient.eulerResult')}</strong></div>
         <div class="orientation-results-layout">
           <div class="imu-cal-results orientation-results">
-            <div>${renderNumGrid('orientation-euler-result', [t('orient.installAngle')], [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], installEuler, {rowHeader: t('flight.axis'), disabled: true})}</div>
+            <div class="table-shell">
+              <table class="grid-table orientation-result-table">
+                <colgroup><col class="orientation-result-label-column"><col span="3"></colgroup>
+                <thead><tr><th>${t('flight.axis')}</th><th>${t('flight.roll')}</th><th>${t('flight.pitch')}</th><th>${t('flight.yaw')}</th></tr></thead>
+                <tbody><tr><th scope="row">${t('orient.installAngle')}</th>${resultValues.map((value) => `<td><output class="orientation-result-value"><strong>${value}</strong><span aria-hidden="true">°</span></output></td>`).join('')}</tr></tbody>
+              </table>
+            </div>
           </div>
           <div class="preview-scene orientation-board-preview" aria-label="${escapeHtml(t('flight.boardOrientation'))}">
             <div class="preview-scene-inner">

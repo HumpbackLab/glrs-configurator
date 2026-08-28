@@ -1056,7 +1056,7 @@ button:disabled {
   align-items: stretch;
   display: grid;
   gap: 14px;
-  grid-template-columns: minmax(520px, 1.6fr) minmax(180px, 0.4fr);
+  grid-template-columns: minmax(0, 1fr) 220px;
 }
 
 .orientation-results-layout > * {
@@ -1064,9 +1064,18 @@ button:disabled {
 }
 
 .orientation-results .grid-table {
-  min-width: 520px;
+  min-width: 560px;
   table-layout: fixed;
+  width: 100%;
 }
+
+.orientation-board-preview {
+  max-width: none;
+  min-height: 150px;
+  width: 100%;
+}
+
+.orientation-result-label-column { width: 128px; }
 
 .orientation-results .grid-table thead th,
 .orientation-results .grid-table tbody th {
@@ -1076,15 +1085,30 @@ button:disabled {
   white-space: normal;
 }
 
-.orientation-results .grid-table input {
-  font-size: 12px;
+.orientation-result-value {
+  align-items: baseline;
+  display: flex;
   font-variant-numeric: tabular-nums;
-  min-width: 110px;
-  padding-left: 2px;
-  padding-right: 2px;
+  gap: 3px;
+  justify-content: center;
+  min-height: 48px;
+  min-width: 132px;
+  padding: 0 14px;
+  white-space: nowrap;
 }
 
-@media (max-width: 1100px) {
+.orientation-result-value strong {
+  color: #172033;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.orientation-result-value span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+@media (max-width: 800px) {
   .orientation-results-layout { grid-template-columns: minmax(0, 1fr); }
 }
 
