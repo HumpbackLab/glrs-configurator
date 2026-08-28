@@ -1,75 +1,29 @@
-name: Build release packages
+name: Build release packages (internal)
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:
+  workflow_call:
     inputs:
       channel:
-        description: Update channel
-        required: true
-        type: choice
-        options: [beta]
-      version:
-        description: Version shown in the beta manifest
         required: true
         type: string
-      ref:
-        description: Branch or commit to build
+      version:
         required: true
-        default: master
+        type: string
+      release_tag:
+        required: true
+        type: string
+      release_id:
+        required: true
+        type: string
+      source_ref:
+        required: true
         type: string
 
 permissions:
   contents: write
 
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      release_tag: ${{ steps.meta.outputs.release_tag }}
-      release_id: ${{ steps.meta.outputs.release_id }}
-      source_ref: ${{ steps.meta.outputs.source_ref }}
-      version: ${{ steps.meta.outputs.version }}
-    steps:
-      - name: Resolve release channel
-        id: meta
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CHANNEL: ${{ inputs.channel || 'release' }}
-          INPUT_VERSION: ${{ inputs.version }}
-          INPUT_REF: ${{ inputs.ref }}
-          EVENT_TAG: ${{ github.event.release.tag_name }}
-          EVENT_RELEASE_ID: ${{ github.event.release.id }}
-        run: |
-          set -Eeuo pipefail
-          if [ "$CHANNEL" = beta ]; then
-            test -n "$INPUT_VERSION"
-            RELEASE_TAG=beta
-            VERSION="${INPUT_VERSION#v}"
-            SOURCE_REF="${INPUT_REF:-master}"
-            if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "Beta configurator $VERSION" --prerelease --target "$SOURCE_REF"
-            else
-              gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "Beta configurator $VERSION" --notes "Automated beta configurator build." --prerelease --target "$SOURCE_REF"
-            fi
-            RELEASE_ID="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.id')"
-          else
-            RELEASE_TAG="$EVENT_TAG"
-            VERSION="${RELEASE_TAG#v}"
-            SOURCE_REF="$RELEASE_TAG"
-            RELEASE_ID="$EVENT_RELEASE_ID"
-          fi
-          {
-            echo "release_tag=$RELEASE_TAG"
-            echo "release_id=$RELEASE_ID"
-            echo "source_ref=$SOURCE_REF"
-            echo "version=$VERSION"
-          } >> "$GITHUB_OUTPUT"
-
   build:
-    needs: prepare
-    if: github.event_name != 'release' || github.event.release.tag_name != 'beta'
     name: Build ${{ matrix.name }} package
     strategy:
       fail-fast: false
@@ -84,14 +38,14 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     concurrency:
-      group: release-${{ needs.prepare.outputs.release_id }}-${{ matrix.platform }}
+      group: release-${{ inputs.release_id }}-${{ matrix.platform }}
       cancel-in-progress: false
 
     steps:
-      - name: Check out the release tag
+      - name: Check out release source
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.source_ref }}
+          ref: ${{ inputs.source_ref }}
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -124,11 +78,15 @@ jobs:
 
       - name: Set or verify application version
         shell: bash
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          if [ "${{ github.event_name }}" = release ]; then
-            node scripts/set-release-version.mjs "${{ needs.prepare.outputs.release_tag }}" --check
+          if [ "$CHANNEL" = release ]; then
+            node scripts/set-release-version.mjs "$RELEASE_TAG" --check
           else
-            node scripts/set-release-version.mjs "${{ needs.prepare.outputs.version }}"
+            node scripts/set-release-version.mjs "$VERSION"
           fi
 
       - name: Build and attach package to the GitHub Release
@@ -139,25 +97,23 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: app
-          releaseId: ${{ needs.prepare.outputs.release_id }}
-          tagName: ${{ needs.prepare.outputs.release_tag }}
+          releaseId: ${{ inputs.release_id }}
+          tagName: ${{ inputs.release_tag }}
           updaterJsonPreferNsis: true
           args: --bundles ${{ matrix.bundles }}
 
   android:
-    needs: prepare
-    if: github.event_name != 'release' || github.event.release.tag_name != 'beta'
     name: Build Android APK
     runs-on: ubuntu-22.04
     concurrency:
-      group: release-${{ needs.prepare.outputs.release_id }}-android
+      group: release-${{ inputs.release_id }}-android
       cancel-in-progress: false
 
     steps:
-      - name: Check out the release tag
+      - name: Check out release source
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.source_ref }}
+          ref: ${{ inputs.source_ref }}
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -198,11 +154,15 @@ jobs:
         run: npm ci
 
       - name: Set or verify application version
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          if [ "${{ github.event_name }}" = release ]; then
-            node scripts/set-release-version.mjs "${{ needs.prepare.outputs.release_tag }}" --check
+          if [ "$CHANNEL" = release ]; then
+            node scripts/set-release-version.mjs "$RELEASE_TAG" --check
           else
-            node scripts/set-release-version.mjs "${{ needs.prepare.outputs.version }}"
+            node scripts/set-release-version.mjs "$VERSION"
           fi
 
       - name: Initialize Android project
@@ -232,16 +192,15 @@ jobs:
         with:
           projectPath: app
           mobile: android
-          releaseId: ${{ needs.prepare.outputs.release_id }}
-          tagName: ${{ needs.prepare.outputs.release_tag }}
+          releaseId: ${{ inputs.release_id }}
+          tagName: ${{ inputs.release_tag }}
           uploadUpdaterJson: false
           releaseAssetNamePattern: gyro-elrs-configurator_[version]_[arch].[ext]
           args: --target aarch64 --apk --split-per-abi --ci
 
   android-manifest:
     name: Publish Android update manifest
-    needs: [prepare, build, android]
-    if: github.event_name != 'release' || github.event.release.tag_name != 'beta'
+    needs: [build, android]
     runs-on: ubuntu-latest
 
     steps:
@@ -249,7 +208,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
-          TAG: ${{ needs.prepare.outputs.release_tag }}
+          TAG: ${{ inputs.release_tag }}
         run: |
           set -Eeuo pipefail
           mkdir -p "$RUNNER_TEMP/android-update"
@@ -290,8 +249,8 @@ jobs:
 
   sync-gitee:
     name: Sync release to Gitee
-    needs: [prepare, android-manifest]
-    if: github.event_name == 'release' && github.event.release.tag_name != 'beta'
+    needs: android-manifest
+    if: inputs.channel == 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -314,4 +273,4 @@ jobs:
           ./scripts/sync-github-release-to-gitee.sh \
             "${{ github.repository }}" \
             "$GITEE_REPOSITORY" \
-            "${{ needs.prepare.outputs.release_tag }}"
+            "${{ inputs.release_tag }}"
