@@ -28,6 +28,8 @@ const COMMUNITY_IMAGE_MAX_DIMENSION = 800;
 const COMMUNITY_CACHE_DB = 'gyro-elrs-community-cache';
 const COMMUNITY_CACHE_STORE = 'entries';
 const COMMUNITY_CACHE_VERSION = 1;
+const DEFAULT_DTERM_LPF_HZ = 0;
+const DEFAULT_GYRO_LPF_HZ = 0;
 
 function defaultUpdateSource() {
   return getLocale() === 'zh-CN' ? 'gitee' : 'github';
@@ -1071,12 +1073,12 @@ async function saveFlight(event) {
       }
       nextConfig.fc_angle_rate_limits_dps = angleRateLimits;
     }
-    const dtermLpfHz = intOrDefault(form.fc_dterm_lpf_hz.value, 20);
+    const dtermLpfHz = intOrDefault(form.fc_dterm_lpf_hz.value, DEFAULT_DTERM_LPF_HZ);
     if (dtermLpfHz < 0 || dtermLpfHz > 100 || (dtermLpfHz > 0 && dtermLpfHz < 5)) {
       throw new Error(t('error.invalidDtermLpf'));
     }
     nextConfig.fc_dterm_lpf_hz = dtermLpfHz;
-    const gyroLpfHz = intOrDefault(form.fc_gyro_lpf_hz.value, 30);
+    const gyroLpfHz = intOrDefault(form.fc_gyro_lpf_hz.value, DEFAULT_GYRO_LPF_HZ);
     if (gyroLpfHz < 0 || gyroLpfHz > 100 || (gyroLpfHz > 0 && gyroLpfHz < 5)) {
       throw new Error(t('error.invalidGyroLpf'));
     }
@@ -2228,8 +2230,8 @@ function profileFlightConfig() {
       ratePid: flightConfigValue('fc_rate_pid', []),
       anglePid: flightConfigValue('fc_angle_pid', []),
       angleRateLimitsDps: flightConfigValue('fc_angle_rate_limits_dps', [100, 100]),
-      dtermLpfHz: flightConfigValue('fc_dterm_lpf_hz', 20),
-      gyroLpfHz: flightConfigValue('fc_gyro_lpf_hz', 30),
+      dtermLpfHz: flightConfigValue('fc_dterm_lpf_hz', DEFAULT_DTERM_LPF_HZ),
+      gyroLpfHz: flightConfigValue('fc_gyro_lpf_hz', DEFAULT_GYRO_LPF_HZ),
       gyroBiasMode: flightConfigValue('fc_gyro_bias_mode', 0),
       mixer: flightConfigValue('fc_mixer', []),
       mixerServos: flightConfigValue('fc_mixer_servos', []),
@@ -2262,8 +2264,8 @@ function profileFlightConfig() {
       intOrDefault(form.fc_angle_rate_limit_roll_dps.value, 100),
       intOrDefault(form.fc_angle_rate_limit_pitch_dps.value, 100),
     ],
-    dtermLpfHz: intOrDefault(form.fc_dterm_lpf_hz.value, 20),
-    gyroLpfHz: intOrDefault(form.fc_gyro_lpf_hz.value, 30),
+    dtermLpfHz: intOrDefault(form.fc_dterm_lpf_hz.value, DEFAULT_DTERM_LPF_HZ),
+    gyroLpfHz: intOrDefault(form.fc_gyro_lpf_hz.value, DEFAULT_GYRO_LPF_HZ),
     gyroBiasMode: intOrDefault(form.fc_gyro_bias_mode.value, 0),
     mixer: readNumGrid(form, 'fc_mixer', motorCount(), 4),
     mixerServos: readMixerServos(form, motorCount()),
@@ -2471,11 +2473,11 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
       modeConditions[mode] = values;
     }
     const arm = profile.flight.arm || {};
-    const dtermLpfHz = requireProfileNumber(profile.flight.dtermLpfHz ?? 20, 'D-term LPF', 0, 100, true);
+    const dtermLpfHz = requireProfileNumber(profile.flight.dtermLpfHz ?? DEFAULT_DTERM_LPF_HZ, 'D-term LPF', 0, 100, true);
     if (dtermLpfHz > 0 && dtermLpfHz < 5) {
       throw new Error(t('error.invalidDtermLpf'));
     }
-    const gyroLpfHz = requireProfileNumber(profile.flight.gyroLpfHz ?? 30, 'Gyro LPF', 0, 100, true);
+    const gyroLpfHz = requireProfileNumber(profile.flight.gyroLpfHz ?? DEFAULT_GYRO_LPF_HZ, 'Gyro LPF', 0, 100, true);
     if (gyroLpfHz > 0 && gyroLpfHz < 5) {
       throw new Error(t('error.invalidGyroLpf'));
     }
@@ -3859,8 +3861,8 @@ function renderFlight() {
   const ratePid = flightConfigValue('fc_rate_pid', []);
   const anglePid = flightConfigValue('fc_angle_pid', []);
   const angleRateLimits = flightConfigValue('fc_angle_rate_limits_dps', [100, 100]);
-  const dtermLpfHz = flightConfigValue('fc_dterm_lpf_hz', 20);
-  const gyroLpfHz = flightConfigValue('fc_gyro_lpf_hz', 30);
+  const dtermLpfHz = flightConfigValue('fc_dterm_lpf_hz', DEFAULT_DTERM_LPF_HZ);
+  const gyroLpfHz = flightConfigValue('fc_gyro_lpf_hz', DEFAULT_GYRO_LPF_HZ);
   const angleEnabled = Boolean(flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 2100]}).angle);
   const mixer = flightConfigValue('fc_mixer', []);
   const mixerServos = flightConfigValue('fc_mixer_servos', []);
