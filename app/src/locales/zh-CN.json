@@ -54,8 +54,7 @@
     "importCommunityProfile": "直接导入"
   },
   "notice": {
-    "working": "处理中...",
-    "rateLoop": "MANUAL 绕过 PID，RATE 使用角速度环，ANGLE 使用角度外环和角速度内环。"
+    "working": "处理中..."
   },
   "beginnerGuide": {
     "stepImport": "第一步：导入社区配置",
@@ -84,7 +83,6 @@
   },
   "profile": {
     "heading": "配置分享",
-    "description": "导出或导入 PWM、混控器、PID 和飞控安装角。导入只会填写配置器表单，绝不会直接写入接收机。",
     "unsaved": "导入值暂存在配置器中。请前往 PWM 和飞控页面检查，并分别点击现有的“保存”按钮写入接收机。",
     "offlineReady": "配置已在离线模式中载入，可以查看或再次导出；连接接收机后才可保存。",
     "deviceIncompatible": "该配置不能写入当前设备：{message}",
@@ -99,7 +97,6 @@
     "profileFile": "本地配置文件",
     "selectProfileHint": "请选择 Gyro ELRS 配置 JSON",
     "imageFile": "飞机图片（选填）",
-    "imageHelp": "将自动压缩为较小的 WebP 图片，最大约 120 KB。",
     "imageNone": "未选择飞机图片",
     "profileSummary": "目标：{target} · PWM：{pwmOutputs} · 电机：{motors}",
     "phone": "手机号（选填）",
@@ -180,11 +177,10 @@
     "headingShort": "PWM",
     "beginnerModeUnsupported": "新手模式下不支持配置 PWM。",
     "beginnerModeNoMixer": "当前没有混控器配置，请前往“状态 → 导入配置”，或者使用社区配置。",
-    "noPwmNotice": "此目标未通过 <code>/config</code> 暴露 PWM 输出。",
+    "noPwmNotice": "此设备不支持 PWM 输出配置。",
     "offlineNotice": "未连接设备。当前为离线预览，连接接收机后才可保存。",
     "help": {
-      "general": "配置各接收机输出引脚的通道模式、输入来源、反转、脉冲宽度和失控保护。<code>Invert</code> 将控制值以 <code>1500us</code> 为中心镜像。<code>Polarity</code> 存储原始信号极性标志，实际效果取决于当前平台和输出模式。比 <code>Serial RX/TX</code> 更高的模式为独占模式，只能分配给一个输出。",
-      "serial2": "当有输出被分配给 <code>Serial2 TX</code> 时显示。"
+      "general": "配置各输出引脚的模式、来源、反转、脉宽和失控保护。<code>Invert</code> 以 <code>1500us</code> 为中心反转控制值；独占模式只能分配给一路输出。"
     },
     "output": "输出",
     "pin": "引脚",
@@ -236,7 +232,6 @@
     "ratePid": "Rate PID",
     "ratePidHelp": "RATE 与 ANGLE 模式共用的角速度内环控制参数。",
     "beginnerSensitivity": "感度（反馈强度）",
-    "beginnerSensitivityHelp": "调节三轴反馈强度，范围为通用基准的0.5倍到2倍，5级为1倍。",
     "beginnerSensitivityValue": "{level}级",
     "beginnerReverseFeedback": "反向反馈",
     "beginnerServoDebounce": "舵机去抖",
@@ -248,7 +243,6 @@
     "dtermLpf": "D-term 低通截止频率 (Hz)",
     "dtermLpfHelp": "全局应用于 Rate 和 Angle PID。允许 5–100Hz；设为 0 可关闭滤波，默认 20Hz。",
     "filterSettings": "滤波设置",
-    "filterSettingsHelp": "集中配置陀螺仪输入低通与 D-term 低通。",
     "gyroLpf": "陀螺仪低通截止频率 (Hz)",
     "gyroLpfHelp": "在姿态估计和 PID 之前过滤三轴陀螺仪数据。允许 5–100Hz；设为 0 可关闭滤波，默认 30Hz。",
     "mixer": "混控器",
@@ -309,10 +303,8 @@
     }
   },
   "firmwareUpdate": {
-    "description": "联网时会自动检查、校验并缓存最新 LightFin Nano 固件；随后连接接收机 WiFi，即可离线比较版本并使用下方功能手动刷写。",
+    "description": "联网时自动缓存最新固件，连接接收机后可离线刷写。",
     "downloading": "正在下载并校验固件",
-    "savedTo": "固件已保存到 {path}",
-    "directFlashHint": "连接接收机后可直接刷写已下载固件，无需在安卓文件管理器中查找。",
     "latestVersion": "最新固件版本",
     "releaseNotes": "Release Notes",
     "status": {
@@ -329,7 +321,6 @@
   },
   "appUpdate": {
     "heading": "配置器更新",
-    "description": "检查并安装 Gyro ELRS Configurator 的新版本。桌面端会自动安装；Android 会打开系统安装程序等待确认。",
     "source": "更新源",
     "sourceGitee": "Gitee（国内推荐）",
     "sourceGithub": "GitHub",
@@ -405,7 +396,7 @@
     "configuredBiasHelp": "使用下方保存到固件配置中的三轴零偏，解锁时不重新采样。",
     "armSampleBias": "解锁时自动校准",
     "quadcopterRecommended": "建议四旋翼开启",
-    "armSampleBiasHelp": "收到解锁请求后保持锁定，采集 100 个样本并只更新本次运行的控制零偏；不会写入配置。",
+    "armSampleBiasHelp": "收到解锁请求后保持锁定并校准控制零偏；仅本次运行有效，不写入配置。",
     "progress": "{done}/6 面",
     "faceXPos": "机头朝上（+X）",
     "faceXNeg": "机尾朝上（−X）",
@@ -524,7 +515,6 @@
   },
   "pidlog": {
     "heading": "PID 波形",
-    "description": "开始采集后通过 MSP 主动轮询飞控；无需切换 CH6，曲线不补点、不插值。",
     "connecting": "连接中…",
     "start": "开始采集",
     "stop": "停止采集",

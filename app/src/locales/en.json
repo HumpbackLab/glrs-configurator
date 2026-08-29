@@ -54,8 +54,7 @@
     "importCommunityProfile": "Import into Forms"
   },
   "notice": {
-    "working": "Working...",
-    "rateLoop": "MANUAL bypasses PID, RATE uses the rate loop, and ANGLE uses both angle and rate loops."
+    "working": "Working..."
   },
   "beginnerGuide": {
     "stepImport": "Step 1: Import a community profile",
@@ -84,7 +83,6 @@
   },
   "profile": {
     "heading": "Configuration Sharing",
-    "description": "Export or import PWM, mixer, PID and board orientation settings. Importing only fills the configurator forms and never writes to the receiver.",
     "unsaved": "Imported values are staged in the configurator. Use the existing Save button on the PWM and Flight pages to write each section to the receiver.",
     "offlineReady": "The profile is loaded offline and can be viewed or exported again. Connect a receiver before saving.",
     "deviceIncompatible": "This profile cannot be written to the connected device: {message}",
@@ -99,7 +97,6 @@
     "profileFile": "Local profile file",
     "selectProfileHint": "Choose a Gyro ELRS profile JSON file",
     "imageFile": "Aircraft image (optional)",
-    "imageHelp": "It will be compressed to a small WebP image, up to about 120 KB.",
     "imageNone": "No aircraft image selected",
     "profileSummary": "Target: {target} · PWM: {pwmOutputs} · Motors: {motors}",
     "phone": "Phone number (optional)",
@@ -180,11 +177,10 @@
     "headingShort": "PWM",
     "beginnerModeUnsupported": "PWM configuration is not available in Beginner mode.",
     "beginnerModeNoMixer": "No mixer configuration is available. Go to Status → Import Profile, or use a community profile.",
-    "noPwmNotice": "This target does not expose PWM outputs through <code>/config</code>.",
+    "noPwmNotice": "This device does not support PWM output configuration.",
     "offlineNotice": "Not connected to a device. This is an offline preview; connect a receiver before saving.",
     "help": {
-      "general": "Configure each receiver output pin mode, source channel, inversion, pulse width and failsafe. <code>Invert</code> mirrors the control value around <code>1500us</code>. <code>Polarity</code> stores the raw signal-polarity flag; whether it has an effect depends on the current platform and output mode. Modes above <code>Serial RX/TX</code> are exclusive and can only be assigned once.",
-      "serial2": "Shown when any output is assigned to <code>Serial2 TX</code>."
+      "general": "Configure each output pin's mode, source, inversion, pulse width, and failsafe. <code>Invert</code> mirrors control around <code>1500us</code>; exclusive modes can only be assigned to one output."
     },
     "output": "Output",
     "pin": "Pin",
@@ -236,7 +232,6 @@
     "ratePid": "Rate PID",
     "ratePidHelp": "Inner-loop angular-rate control for RATE and ANGLE modes.",
     "beginnerSensitivity": "Sensitivity (feedback strength)",
-    "beginnerSensitivityHelp": "Adjust three-axis feedback from 0.5x to 2x of the shared baseline. Level 5 is 1x.",
     "beginnerSensitivityValue": "Level {level}",
     "beginnerReverseFeedback": "Reverse feedback",
     "beginnerServoDebounce": "Servo jitter reduction",
@@ -248,7 +243,6 @@
     "dtermLpf": "D-term LPF cutoff (Hz)",
     "dtermLpfHelp": "Applied globally to Rate and Angle PID. Use 5–100Hz, or 0 to disable filtering. Default: 20Hz.",
     "filterSettings": "Filter Settings",
-    "filterSettingsHelp": "Configure gyro input and D-term low-pass filtering in one place.",
     "gyroLpf": "Gyro LPF cutoff (Hz)",
     "gyroLpfHelp": "Filters all three gyro axes before attitude estimation and PID. Use 5–100Hz, or 0 to disable filtering. Default: 30Hz.",
     "mixer": "Mixer",
@@ -309,10 +303,8 @@
     }
   },
   "firmwareUpdate": {
-    "description": "While online, the latest LightFin Nano firmware is checked, verified, and cached automatically. You can then connect to the receiver WiFi to compare versions and flash it manually.",
+    "description": "The latest firmware is cached automatically while online and can be flashed offline after connecting to the receiver.",
     "downloading": "Downloading and verifying firmware",
-    "savedTo": "Firmware saved to {path}",
-    "directFlashHint": "Once connected to the receiver, you can flash this download directly without locating it in Android's file manager.",
     "latestVersion": "Latest firmware version",
     "releaseNotes": "Release Notes",
     "status": {
@@ -329,7 +321,6 @@
   },
   "appUpdate": {
     "heading": "Configurator Update",
-    "description": "Check for and install a new Gyro ELRS Configurator version. Desktop updates install automatically; Android opens the system installer for confirmation.",
     "source": "Update source",
     "sourceGitee": "Gitee (China mirror)",
     "sourceGithub": "GitHub",
@@ -405,7 +396,7 @@
     "configuredBiasHelp": "Use the three-axis bias saved below; arming does not sample a new bias.",
     "armSampleBias": "Sample while arming",
     "quadcopterRecommended": "Recommended for quadcopters",
-    "armSampleBiasHelp": "Stay disarmed after an arm request, collect 100 samples, and update only the runtime control bias without writing configuration.",
+    "armSampleBiasHelp": "Stay disarmed after an arm request and calibrate the control bias for this runtime only without writing configuration.",
     "progress": "{done}/6 faces",
     "faceXPos": "Nose up (+X)",
     "faceXNeg": "Tail up (−X)",
@@ -524,7 +515,6 @@
   },
   "pidlog": {
     "heading": "PID plots",
-    "description": "Start capture to actively poll the flight controller over MSP. No CH6 switch is required, and samples are neither filled nor interpolated.",
     "connecting": "Connecting…",
     "start": "Start capture",
     "stop": "Stop capture",

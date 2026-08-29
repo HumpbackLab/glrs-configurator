@@ -3358,7 +3358,7 @@ function renderCommunitySubmission() {
         <form id="community-submission-form">
           <div class="row"><label for="community-profile-file">${t('community.profileFile')} *</label><input id="community-profile-file" name="profileFile" type="file" accept="application/json,.json" required></div>
           <div id="community-profile-preview" class="submission-profile-preview">${t('community.selectProfileHint')}</div>
-          <div class="row"><label for="community-image-file">${t('community.imageFile')}</label><input id="community-image-file" name="imageFile" type="file" accept="image/jpeg,image/png,image/webp"><div class="helper">${t('community.imageHelp')}</div><div id="community-image-preview" class="submission-image-preview">${t('community.imageNone')}</div></div>
+          <div class="row"><label for="community-image-file">${t('community.imageFile')}</label><input id="community-image-file" name="imageFile" type="file" accept="image/jpeg,image/png,image/webp"><div id="community-image-preview" class="submission-image-preview">${t('community.imageNone')}</div></div>
           <div class="row"><label for="community-phone">${t('community.phone')}</label><input id="community-phone" name="phone" type="tel" autocomplete="tel" maxlength="32" placeholder="+86 138 0000 0000"><div class="helper">${t('community.phonePrivacy')}</div></div>
           <div class="row"><label for="community-title">${t('community.title')} *</label><input id="community-title" name="title" minlength="3" maxlength="80" required></div>
           <div class="row"><label for="community-summary">${t('community.summary')}</label><textarea id="community-summary" name="summary" maxlength="500"></textarea></div>
@@ -3402,7 +3402,6 @@ function renderStatus() {
       </section>
       <section class="panel profile-panel">
         <h2>${t('profile.heading')}</h2>
-        <div class="helper">${t('profile.description')}</div>
         ${state.profileDraft ? `<div class="notice profile-unsaved">${state.target ? t('profile.unsaved') : t('profile.offlineReady')}</div>` : ''}
         ${state.profileImportError ? `<div class="message error">${escapeHtml(t('profile.deviceIncompatible', {message: state.profileImportError}))}</div>` : ''}
         <input id="profile-file" type="file" accept="application/json,.json" hidden>
@@ -3580,7 +3579,6 @@ function renderPwm() {
         <div class="row" id="serial1-config-row" style="display:${serial2Visible ? 'grid' : 'none'};">
           <label for="serial1-protocol">${t('pwm.serial2Protocol')}</label>
           <select id="serial1-protocol" name="serial1-protocol">${serial1Protocols.map(([value, label]) => `<option value="${value}" ${selected(state.profileDraft?.serial1Protocol ?? configValue('serial1-protocol', 0), value)}>${label}</option>`).join('')}</select>
-          <div class="helper">${t('pwm.help.serial2')}</div>
         </div>
         <div class="actions"><button class="primary" ${state.busy || offline || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="refresh">${t('action.refresh')}</button></div>
       </form>
@@ -3886,7 +3884,7 @@ function renderFlight() {
         <form id="flight-form">
           ${state.beginnerGuide.active && state.beginnerGuide.step === 2 ? `<div class="beginner-guide-banner flight-guide-banner"><strong>${t('beginnerGuide.stepOrientation')}</strong><span>${t('beginnerGuide.stepOrientationHelp')}</span><button class="secondary" type="button" data-action="beginner-guide-cancel">${t('beginnerGuide.cancel')}</button></div>` : ''}
           <section class="beginner-sensitivity-card">
-            <div class="beginner-sensitivity-header"><h3>${t('flight.beginnerSensitivity')}</h3><p>${t('flight.beginnerSensitivityHelp')}</p></div>
+            <div class="beginner-sensitivity-header"><h3>${t('flight.beginnerSensitivity')}</h3></div>
             <div class="beginner-sensitivity-grid">
               ${sensitivityAxes.map(([axis, label, gain]) => {
                 const level = beginnerSensitivityLevel(gain);
@@ -3939,9 +3937,8 @@ function renderFlight() {
             ${renderActivationRange('wifi_coexist', t('flight.wifiCoexist'), t('flight.wifiCoexistDescription'), wifiConditions.coexist?.slice(1) ?? [1700, 2100], '#0891b2', !wifiConditions.coexist, wifiConditions.coexist?.[0] ?? 7, auxOptions)}
           </div>
         </div>
-        <div class="notice">${t('notice.rateLoop')}</div>
         <div class="filter-config">
-          <div class="filter-config-header"><div><h3>${t('flight.filterSettings')}</h3><div class="helper">${t('flight.filterSettingsHelp')}</div></div></div>
+          <div class="filter-config-header"><div><h3>${t('flight.filterSettings')}</h3></div></div>
           <div class="filter-config-body">
             <div class="filter-lpf-grid">
               <div class="row">
@@ -4078,7 +4075,7 @@ function renderPidLegend(series) {
 function renderPidLog() {
   return `<div class="pid-log-layout">
     <section class="panel">
-      <div class="panel-heading"><div><h2>${t('pidlog.heading')}</h2><div class="helper">${t('pidlog.description')}</div></div></div>
+      <div class="panel-heading"><div><h2>${t('pidlog.heading')}</h2></div></div>
       <div class="actions"><button class="primary" type="button" data-action="pidlive-${state.pidLiveReceiving ? 'stop' : 'start'}" ${state.pidLiveStarting ? 'disabled' : ''}>${state.pidLiveStarting ? t('pidlog.connecting') : state.pidLiveReceiving ? t('pidlog.stop') : t('pidlog.start')}</button><button class="secondary" type="button" data-action="pidlive-clear">${t('pidlog.clear')}</button><button class="secondary" type="button" data-action="pidlive-save" ${state.pidLogSamples.length ? '' : 'disabled'}>${t('pidlog.save')}</button></div>
       ${state.pidLogError ? `<div class="message error">${escapeHtml(state.pidLogError)}</div>` : ''}
       <div class="metrics"><div class="metric"><span>${t('pidlog.pollRate')}</span><strong id="pid-live-rate">${state.pidLiveRateHz.toFixed(1)} Hz</strong></div><div class="metric"><span>${t('pidlog.points')}</span><strong id="pid-live-packets">${state.pidLivePackets.toLocaleString()}</strong></div><div class="metric"><span>${t('pidlog.duplicates')}</span><strong id="pid-live-duplicates">${state.pidLiveDuplicates.toLocaleString()}</strong></div></div>
@@ -4406,7 +4403,6 @@ function renderUpdate() {
     <div class="grid">
       <section class="panel">
         <h2>${t('appUpdate.heading')}</h2>
-        <p class="helper">${t('appUpdate.description')}</p>
         <div class="row">
           <label for="app-update-source">${t('appUpdate.source')}</label>
           <select id="app-update-source" ${['checking', 'downloading', 'permission', 'installing', 'installed'].includes(appUpdate.status) ? 'disabled' : ''}>
@@ -4439,8 +4435,6 @@ function renderUpdate() {
         ${firmwareUpdate.error ? `<div class="message error">${escapeHtml(firmwareUpdate.error)}</div>` : ''}
         ${firmwareUpdate.latestVersion ? `<div class="firmware-release-version"><span>${t('firmwareUpdate.latestVersion')}</span><strong>${escapeHtml(firmwareUpdate.latestVersion)}</strong></div>` : ''}
         ${firmwareUpdate.notes ? `<div class="firmware-release-notes"><strong>${t('firmwareUpdate.releaseNotes')}</strong><div class="app-update-notes">${escapeHtml(firmwareUpdate.notes)}</div></div>` : ''}
-        ${firmwareUpdate.path ? `<div class="app-update-notes">${escapeHtml(t('firmwareUpdate.savedTo', {path: firmwareUpdate.path}))}</div>` : ''}
-        ${firmwareUpdate.status === 'downloaded' ? `<p class="helper">${t('firmwareUpdate.directFlashHint')}</p>` : ''}
         ${firmwareUpdate.status === 'downloading' ? `<div class="upload-progress"><div class="upload-progress-meta"><span>${t('firmwareUpdate.downloading')}</span><strong>${firmwareProgressPercent}%</strong></div><div class="upload-progress-bar"><span style="width:${firmwareProgressPercent}%"></span></div></div>` : ''}
         <div class="actions">
           <button class="secondary" type="button" data-action="firmware-update-check" ${['checking', 'downloading'].includes(firmwareUpdate.status) ? 'disabled' : ''}>${t('action.checkFirmwareUpdate')}</button>
