@@ -1,6 +1,6 @@
 # Gyro ELRS Configurator
 
-ELRS 飞控接收机配置工具。基于 Tauri v2 构建，支持 Windows、Linux 和 Android 平台。
+ELRS 飞控接收机配置工具。基于 Tauri v2 构建，支持 Windows、Linux、macOS 和 Android 平台。
 
 本工具通过 HTTP API 对 ELRS 接收机进行配置，并通过 MSP v2 over TCP 协议实现实时调试数据轮询与 3D 姿态可视化。
 
@@ -47,6 +47,9 @@ npm run tauri build    # 生产构建
 
 构建产物位于 `app/src-tauri/target/release/bundle/`。
 
+在 macOS 上，`npm run tauri build` 默认生成 DMG 安装包。发布工作流会分别构建
+Intel (`x86_64`) 和 Apple Silicon (`aarch64`) 版本。
+
 Android 首次构建前先初始化移动端工程：
 
 ```bash
@@ -61,7 +64,7 @@ Android Release 构建会自动允许访问接收机的明文 HTTP API（默认
 
 ### 发布与应用自动更新
 
-发布 GitHub Release 后，`.github/workflows/release.yml` 会从 Release 标签构建对应版本，上传 Windows NSIS、Linux DEB、Android arm64-v8a APK、更新签名和 `latest.json`。Release 标签必须使用 `vX.Y.Z` 或 `X.Y.Z` 格式。
+发布 GitHub Release 后，`.github/workflows/release.yml` 会从 Release 标签构建对应版本，上传 Windows NSIS、Linux DEB、macOS Intel/Apple Silicon DMG、Android arm64-v8a APK、更新签名和 `latest.json`。Release 标签必须使用 `vX.Y.Z` 或 `X.Y.Z` 格式。
 
 自动更新包使用 Tauri 签名密钥验证。发布前需要在 GitHub 仓库 Actions secrets 中配置：
 
@@ -78,7 +81,7 @@ base64 -w 0 app/src-tauri/gyro-elrs-configurator-release.jks | gh secret set AND
 sed -n 's/^storePassword=//p' app/src-tauri/keystore.properties | gh secret set ANDROID_KEYSTORE_PASSWORD
 ```
 
-发布工作流会在 Windows、Linux 和 Android 构建全部成功后，将 Release 及其附件同步到 `ncer/glrs-configurator`，并更新 `master/updater/latest.json`。Android 仅构建主流手机使用的 arm64-v8a APK，以满足 Gitee 社区版 50 MB 的单文件限制；同步前会确认至少存在一个未超过限制的 APK。如需使用其他 Gitee 仓库，可在 GitHub Actions variables 中设置 `GITEE_REPOSITORY`（格式为 `owner/repository`）。
+发布工作流会在 Windows、Linux、macOS 和 Android 构建全部成功后，将 Release 及其附件同步到 `ncer/glrs-configurator`，并更新 `master/updater/latest.json`。Android 仅构建主流手机使用的 arm64-v8a APK，以满足 Gitee 社区版 50 MB 的单文件限制；同步前会确认至少存在一个未超过限制的 APK。如需使用其他 Gitee 仓库，可在 GitHub Actions variables 中设置 `GITEE_REPOSITORY`（格式为 `owner/repository`）。
 
 私钥不得提交到仓库，且必须安全备份；丢失私钥后，已安装的应用将无法升级到使用新密钥签名的版本。
 

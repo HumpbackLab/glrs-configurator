@@ -23,7 +23,7 @@
 `glrs-configurator/.github/workflows/release.yml` 在 GitHub Release 发布时执行：
 
 1. 检出 Release 标签。
-2. 构建 Windows NSIS、Linux DEB 和签名的 Android APK。
+2. 构建 Windows NSIS、Linux DEB、macOS Intel/Apple Silicon DMG 和签名的 Android APK。
 3. 使用 Tauri updater 私钥签名桌面更新包。
 4. 将安装包、签名和 `latest.json` 上传到 GitHub Release。
 5. 为 APK 计算大小和 SHA-256，生成 `android-latest.json`。
