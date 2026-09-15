@@ -30,6 +30,7 @@ const COMMUNITY_CACHE_STORE = 'entries';
 const COMMUNITY_CACHE_VERSION = 1;
 const DEFAULT_DTERM_LPF_HZ = 0;
 const DEFAULT_GYRO_LPF_HZ = 0;
+const DEFAULT_ANGLE_RATE_LPF_HZ = 5;
 
 function defaultUpdateSource() {
   return getLocale() === 'zh-CN' ? 'gitee' : 'github';
@@ -1066,6 +1067,7 @@ async function saveFlight(event) {
     if (armStart < 900 || armEnd > 2100 || armStart >= armEnd) throw new Error(`${t('message.invalidRange')}: ARM`);
     nextConfig.fc_arm_range = [armStart, armEnd];
     nextConfig.fc_rate_pid = readNumGrid(form, 'fc_rate_pid', 3, 4);
+    nextConfig.fc_rate_ff = readNumGrid(form, 'fc_rate_ff', 3, 1);
     const angleEnabled = form.fc_angle_enabled.checked;
     if (angleEnabled) {
       nextConfig.fc_angle_pid = readNumGrid(form, 'fc_angle_pid', 3, 4);
@@ -1088,6 +1090,11 @@ async function saveFlight(event) {
       throw new Error(t('error.invalidGyroLpf'));
     }
     nextConfig.fc_gyro_lpf_hz = gyroLpfHz;
+    const angleRateLpfHz = intOrDefault(form.fc_angle_rate_lpf_hz.value, DEFAULT_ANGLE_RATE_LPF_HZ);
+    if (angleRateLpfHz < 0 || angleRateLpfHz > 100) {
+      throw new Error(t('error.invalidAngleRateLpf'));
+    }
+    nextConfig.fc_angle_rate_lpf_hz = angleRateLpfHz;
     nextConfig.fc_gyro_bias_mode = intOrDefault(form.fc_gyro_bias_mode.value, 0);
     nextConfig.fc_mixer = readNumGrid(form, 'fc_mixer', motorCount(), 4);
     nextConfig.fc_mixer_servos = readMixerServos(form, motorCount());
@@ -1156,6 +1163,14 @@ function readBeginnerRatePid(form) {
   const servoDebounce = [0, 1, 2].map((axis) =>
     Boolean(form.elements[`beginner-servo-debounce-${axis}`]?.checked));
   return beginnerRatePidFromLevels(levels, reversed, servoDebounce);
+}
+
+function readBeginnerRateFeedforward(form) {
+  const configured = flightConfigValue('fc_rate_ff', [0, 0, 0]);
+  return [0, 1, 2].map((axis) => {
+    const magnitude = Math.abs(Number(configured[axis]) || 0);
+    return form.elements[`beginner-reverse-feedback-${axis}`]?.checked ? -magnitude : magnitude;
+  });
 }
 
 function startBeginnerGuide() {
@@ -1245,6 +1260,7 @@ async function saveBeginnerFlightOrientation(form) {
     ...config(),
     fc_orientation: orientationMatrixOrIdentity(state.orientationMatrix).map(round4),
     fc_rate_pid: readBeginnerRatePid(form),
+    fc_rate_ff: readBeginnerRateFeedforward(form),
   };
   // The configuration read endpoint exposes PWM entries as objects with
   // metadata, while the write endpoint expects an array of raw integers.
@@ -2233,10 +2249,12 @@ function profileFlightConfig() {
         range: flightConfigValue('fc_arm_range', [1700, 2100]),
       },
       ratePid: flightConfigValue('fc_rate_pid', []),
+      rateFeedforward: flightConfigValue('fc_rate_ff', [0, 0, 0]),
       anglePid: flightConfigValue('fc_angle_pid', []),
       angleRateLimitsDps: flightConfigValue('fc_angle_rate_limits_dps', [100, 100]),
       dtermLpfHz: flightConfigValue('fc_dterm_lpf_hz', DEFAULT_DTERM_LPF_HZ),
       gyroLpfHz: flightConfigValue('fc_gyro_lpf_hz', DEFAULT_GYRO_LPF_HZ),
+      angleRateLpfHz: flightConfigValue('fc_angle_rate_lpf_hz', DEFAULT_ANGLE_RATE_LPF_HZ),
       gyroBiasMode: flightConfigValue('fc_gyro_bias_mode', 0),
       mixer: flightConfigValue('fc_mixer', []),
       mixerServos: flightConfigValue('fc_mixer_servos', []),
@@ -2264,6 +2282,7 @@ function profileFlightConfig() {
       ],
     },
     ratePid: readNumGrid(form, 'fc_rate_pid', 3, 4),
+    rateFeedforward: readNumGrid(form, 'fc_rate_ff', 3, 1),
     anglePid: readNumGrid(form, 'fc_angle_pid', 3, 4),
     angleRateLimitsDps: [
       intOrDefault(form.fc_angle_rate_limit_roll_dps.value, 100),
@@ -2271,6 +2290,7 @@ function profileFlightConfig() {
     ],
     dtermLpfHz: intOrDefault(form.fc_dterm_lpf_hz.value, DEFAULT_DTERM_LPF_HZ),
     gyroLpfHz: intOrDefault(form.fc_gyro_lpf_hz.value, DEFAULT_GYRO_LPF_HZ),
+    angleRateLpfHz: intOrDefault(form.fc_angle_rate_lpf_hz.value, DEFAULT_ANGLE_RATE_LPF_HZ),
     gyroBiasMode: intOrDefault(form.fc_gyro_bias_mode.value, 0),
     mixer: readNumGrid(form, 'fc_mixer', motorCount(), 4),
     mixerServos: readMixerServos(form, motorCount()),
@@ -2486,6 +2506,13 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
     if (gyroLpfHz > 0 && gyroLpfHz < 5) {
       throw new Error(t('error.invalidGyroLpf'));
     }
+    const angleRateLpfHz = requireProfileNumber(
+      profile.flight.angleRateLpfHz ?? DEFAULT_ANGLE_RATE_LPF_HZ,
+      'ANGLE rate-target LPF',
+      0,
+      100,
+      true,
+    );
     const angleRateLimitsDps = requireProfileArray(
       profile.flight.angleRateLimitsDps ?? [100, 100],
       'ANGLE rate limits',
@@ -2503,10 +2530,12 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
       fc_arm_channel: requireProfileNumber(arm.channel ?? 5, 'ARM channel', 5, 16, true),
       fc_arm_range: validateProfileRange(arm.range, 'ARM range'),
       fc_rate_pid: requireProfileArray(profile.flight.ratePid, 'Rate PID', 12, -327.68, 327.67),
+      fc_rate_ff: requireProfileArray(profile.flight.rateFeedforward ?? [0, 0, 0], 'Rate FF', 3, -327.68, 327.67),
       fc_angle_pid: requireProfileArray(profile.flight.anglePid, 'Angle PID', 12, -327.68, 327.67),
       fc_angle_rate_limits_dps: angleRateLimitsDps,
       fc_dterm_lpf_hz: dtermLpfHz,
       fc_gyro_lpf_hz: gyroLpfHz,
+      fc_angle_rate_lpf_hz: angleRateLpfHz,
       fc_gyro_bias_mode: requireProfileNumber(profile.flight.gyroBiasMode ?? 0, 'Gyro bias mode', 0, 1, true),
       fc_mixer: mixer.map(Number),
       fc_mixer_count: mixer.length,
@@ -3886,10 +3915,12 @@ function renderOrientationCalibration(installEuler) {
 function renderFlight() {
   const motors = motorCount();
   const ratePid = flightConfigValue('fc_rate_pid', []);
+  const rateFeedforward = flightConfigValue('fc_rate_ff', [0, 0, 0]);
   const anglePid = flightConfigValue('fc_angle_pid', []);
   const angleRateLimits = flightConfigValue('fc_angle_rate_limits_dps', [100, 100]);
   const dtermLpfHz = flightConfigValue('fc_dterm_lpf_hz', DEFAULT_DTERM_LPF_HZ);
   const gyroLpfHz = flightConfigValue('fc_gyro_lpf_hz', DEFAULT_GYRO_LPF_HZ);
+  const angleRateLpfHz = flightConfigValue('fc_angle_rate_lpf_hz', DEFAULT_ANGLE_RATE_LPF_HZ);
   const angleEnabled = Boolean(flightConfigValue('fc_mode_conditions', {rate: [6, 1300, 2100]}).angle);
   const mixer = flightConfigValue('fc_mixer', []);
   const mixerServos = flightConfigValue('fc_mixer_servos', []);
@@ -3980,12 +4011,21 @@ function renderFlight() {
                 <input id="fc_dterm_lpf_hz" name="fc_dterm_lpf_hz" type="number" min="0" max="100" step="1" value="${escapeHtml(dtermLpfHz)}">
                 <div class="helper">${t('flight.dtermLpfHelp')}</div>
               </div>
+              <div class="row">
+                <label for="fc_angle_rate_lpf_hz">${t('flight.angleRateLpf')}</label>
+                <input id="fc_angle_rate_lpf_hz" name="fc_angle_rate_lpf_hz" type="number" min="0" max="100" step="1" value="${escapeHtml(angleRateLpfHz)}">
+                <div class="helper">${t('flight.angleRateLpfHelp')}</div>
+              </div>
             </div>
           </div>
         </div>
         <section class="flight-setting-card">
           <div class="flight-setting-card-header"><h3>${t('flight.ratePid')}</h3><p>${t('flight.ratePidHelp')}</p></div>
           <div class="flight-setting-card-body">${renderNumGrid('fc_rate_pid', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kp'), t('flight.ki'), t('flight.kd'), t('flight.iLimit')], ratePid, {rowHeader: t('flight.axis')})}</div>
+        </section>
+        <section class="flight-setting-card">
+          <div class="flight-setting-card-header"><h3>${t('flight.rateFeedforward')}</h3><p>${t('flight.rateFeedforwardHelp')}</p></div>
+          <div class="flight-setting-card-body">${renderNumGrid('fc_rate_ff', [t('flight.roll'), t('flight.pitch'), t('flight.yaw')], [t('flight.kff')], rateFeedforward, {rowHeader: t('flight.axis')})}</div>
         </section>
         <section class="flight-setting-card angle-rate-limit-card" id="angle-rate-limit-card" data-angle-setting style="display:${angleEnabled ? 'block' : 'none'}">
           <div class="flight-setting-card-header"><h3>${t('flight.angleRateLimits')}</h3><p>${t('flight.angleRateLimitsHelp')}</p></div>
