@@ -132,7 +132,11 @@ jobs:
           java-version: 17
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          # The action's default still includes the removed legacy `tools`
+          # package, which makes sdkmanager exit before the Android build.
+          packages: platform-tools
 
       - name: Install Android SDK and NDK packages
         run: |
