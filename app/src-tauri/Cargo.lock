@@ -1467,7 +1467,7 @@ dependencies = [
 
 [[package]]
 name = "gyro-elrs-configurator"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "gyro-android-updater",
  "reqwest 0.12.28",
