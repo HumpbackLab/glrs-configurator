@@ -1,4 +1,5 @@
 import './styles.css';
+import {DRIFT_DEFAULTS, DRIFT_FIELDS, validateDrift} from './drift.js';
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { t, setLocale, getLocale } from './i18n.js';
@@ -53,6 +54,8 @@ const state = {
   apiBase: loadApiBase(),
   tab: 'status',
   target: null,
+  driftStatus: null,
+  driftDetailed: false,
   configResponse: null,
   hardware: null,
   bindingPhrase: '',
@@ -309,6 +312,11 @@ function apiUrl(path) {
 }
 
 async function apiFetch(path, options = {}) {
+  if (path === '/config' && options.method === 'POST' && options.body) {
+    const payload = JSON.parse(options.body);
+    if (!Object.hasOwn(config(), 'fc_drift')) delete payload.fc_drift;
+    options = {...options, body: JSON.stringify(payload)};
+  }
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), options.timeout || 5000);
   const response = await fetch(apiUrl(path), {
@@ -328,6 +336,15 @@ async function apiFetch(path, options = {}) {
   const body = contentType.includes('application/json') ? await response.json() : await response.text();
   if (!response.ok) {
     const detail = typeof body === 'string' ? body : JSON.stringify(body);
+    if (path === '/config' && response.status === 409) {
+      const driftErrors = {
+        'Disarm before changing drift assistance': 'disarm',
+        'Lower throttle to zero before changing drift assistance': 'zero_throttle',
+        'Wait for valid RC state before changing drift assistance': 'rc_state',
+      };
+      const key = driftErrors[detail.trim()];
+      if (key) throw new Error(t(`drift.error.${key}`));
+    }
     throw new Error(`${response.status} ${detail}`);
   }
   return body;
@@ -757,6 +774,8 @@ async function loadDevice() {
   state.connectionStatus = 'connected';
   connectionHealthFailures = 0;
   state.configResponse = configResponse;
+  state.driftStatus = Object.hasOwn(config(), 'fc_drift')
+    ? (await apiFetch('/status.json', {timeout: 2000}).catch(() => null))?.drift ?? null : null;
   state.hardware = hardwareResponse;
   state.imuCalibration = {
     busy: '',
@@ -859,12 +878,17 @@ async function checkConnectionHealth() {
   if (state.connectionStatus !== 'connected' || state.busy || connectionHealthInFlight) return;
   connectionHealthInFlight = true;
   try {
-    await apiFetch('/target', {timeout: CONNECTION_HEALTH_TIMEOUT_MS, cache: 'no-store'});
+    if (Object.hasOwn(config(), 'fc_drift') && ['status', 'flight'].includes(state.tab)) {
+      const status = await apiFetch('/status.json', {timeout: CONNECTION_HEALTH_TIMEOUT_MS, cache: 'no-store'});
+      state.driftStatus = status?.drift ?? null;
+      document.querySelectorAll('[data-drift-status]').forEach((node) => { node.innerHTML = driftStatusHtml(); });
+    } else await apiFetch('/target', {timeout: CONNECTION_HEALTH_TIMEOUT_MS, cache: 'no-store'});
     connectionHealthFailures = 0;
   } catch {
     connectionHealthFailures += 1;
     if (connectionHealthFailures >= CONNECTION_HEALTH_FAILURE_LIMIT && state.connectionStatus === 'connected') {
       state.connectionStatus = 'idle';
+      state.driftStatus = null;
       state.target = null;
       state.configResponse = null;
       state.hardware = null;
@@ -1098,6 +1122,7 @@ async function saveFlight(event) {
     nextConfig.fc_gyro_bias_mode = intOrDefault(form.fc_gyro_bias_mode.value, 0);
     nextConfig.fc_mixer = readNumGrid(form, 'fc_mixer', motorCount(), 4);
     nextConfig.fc_mixer_servos = readMixerServos(form, motorCount());
+    if (Object.hasOwn(config(), "fc_drift")) nextConfig.fc_drift = readDriftForm(form, nextConfig);
     nextConfig.fc_orientation = orientationMatrixOrIdentity(state.orientationMatrix).map(round4);
     nextConfig.fc_gyro_bias = readNumGrid(form, 'fc_gyro_bias', 1, 3);
     nextConfig.fc_accel_bias = readNumGrid(form, 'fc_accel_bias', 1, 3);
@@ -1268,6 +1293,7 @@ async function saveBeginnerFlightOrientation(form) {
   // receiver instead of sending the read-only object representation back.
   delete nextConfig.pwm;
   await runBusy(async () => {
+    if (Object.hasOwn(config(), 'fc_drift')) nextConfig.fc_drift = readDriftForm(form, nextConfig);
     await apiFetch('/config', {method: 'POST', body: JSON.stringify(nextConfig)});
     markProfileSectionApplied('flight');
     await loadDevice();
@@ -2240,7 +2266,7 @@ function profilePwmOutputs() {
 
 function profileFlightConfig() {
   const form = document.querySelector('#flight-form');
-  if (!form) {
+  if (!form || state.beginnerMode) {
     return {
       modeConditions: flightConfigValue('fc_mode_conditions', {}),
       arm: {
@@ -2248,6 +2274,7 @@ function profileFlightConfig() {
         channel: flightConfigValue('fc_arm_channel', 5),
         range: flightConfigValue('fc_arm_range', [1700, 2100]),
       },
+      drift: form && Object.hasOwn(config(), 'fc_drift') ? readDriftForm(form) : flightConfigValue('fc_drift', DRIFT_DEFAULTS),
       ratePid: flightConfigValue('fc_rate_pid', []),
       rateFeedforward: flightConfigValue('fc_rate_ff', [0, 0, 0]),
       anglePid: flightConfigValue('fc_angle_pid', []),
@@ -2281,6 +2308,7 @@ function profileFlightConfig() {
         intOrDefault(form.fc_arm_end.value, 0),
       ],
     },
+    drift: Object.hasOwn(config(), 'fc_drift') ? readDriftForm(form) : flightConfigValue('fc_drift', DRIFT_DEFAULTS),
     ratePid: readNumGrid(form, 'fc_rate_pid', 3, 4),
     rateFeedforward: readNumGrid(form, 'fc_rate_ff', 3, 1),
     anglePid: readNumGrid(form, 'fc_angle_pid', 3, 4),
@@ -2541,7 +2569,9 @@ function validateProfile(profile, {deviceAware = Boolean(state.configResponse)} 
       fc_mixer_count: mixer.length,
       fc_mixer_servos: Array.from({length: mixerOutputCount}, (_, index) => Boolean(mixerServos[index])),
       fc_orientation: orientation,
+      fc_drift: validatedDrift(profile.flight.drift),
     };
+    draft.flight.fc_drift = validatedDrift(draft.flight.fc_drift, draft.flight);
   }
   return {draft, warnings};
 }
@@ -3416,6 +3446,7 @@ function renderStatus() {
   const h = hardware();
   return `<div class="debug-page">
     <div class="grid status-summary-grid">
+      ${Object.hasOwn(config(), 'fc_drift') ? `<section class="panel"><h2>${t('drift.heading')}</h2><div data-drift-status>${driftStatusHtml()}</div></section>` : ''}
       <section class="panel">
         <h2>${t('status.device')}</h2>
         <div class="metric"><span>${t('status.target')}</span><strong>${escapeHtml(state.target?.target || c.target || t('value.unknown'))}</strong></div>
@@ -3737,9 +3768,9 @@ function boardPreviewTransform(roll, pitch, yaw) {
   return `rotateZ(${-yaw}deg) rotateY(${roll}deg) rotateX(${pitch}deg)`;
 }
 
-function renderActivationRange(id, label, description, range, tone, disabled = false, channel = null, auxOptions = null) {
-  const start = clamp(Number(range?.[0]) || 900, 900, 2075);
-  const end = clamp(Number(range?.[1]) || 2100, start + 25, 2100);
+function renderActivationRange(id, label, description, range, tone, disabled = false, channel = null, auxOptions = null, step = 25) {
+  const start = clamp(Number(range?.[0]) || 900, 900, 2100 - step);
+  const end = clamp(Number(range?.[1]) || 2100, start + step, 2100);
   const startPercent = ((start - 900) / 1200) * 100;
   const endPercent = ((end - 900) / 1200) * 100;
   const disabledAttribute = disabled ? 'disabled' : '';
@@ -3752,14 +3783,14 @@ function renderActivationRange(id, label, description, range, tone, disabled = f
       </div>
       <div class="mode-range-control">
         <div class="mode-range-values">
-          <label><span>${t('flight.rangeMin')}</span><span class="mode-value-input"><input data-range-number="start" type="number" min="900" max="2075" step="25" value="${start}" ${disabledAttribute}><small>&micro;s</small></span></label>
+          <label><span>${t('flight.rangeMin')}</span><span class="mode-value-input"><input data-range-number="start" type="number" min="900" max="${2100 - step}" step="${step}" value="${start}" ${disabledAttribute}><small>&micro;s</small></span></label>
           <span class="mode-range-separator">&ndash;</span>
-          <label><span>${t('flight.rangeMax')}</span><span class="mode-value-input"><input data-range-number="end" type="number" min="925" max="2100" step="25" value="${end}" ${disabledAttribute}><small>&micro;s</small></span></label>
+          <label><span>${t('flight.rangeMax')}</span><span class="mode-value-input"><input data-range-number="end" type="number" min="${900 + step}" max="2100" step="${step}" value="${end}" ${disabledAttribute}><small>&micro;s</small></span></label>
         </div>
         <div class="mode-slider">
           <div class="mode-slider-track"><span data-range-fill title="${t('flight.dragRange')}"></span></div>
-          <input name="fc_${id}_start" data-range-handle="start" type="range" min="900" max="2100" step="25" value="${start}" aria-label="${label} ${t('flight.rangeMin')}" ${disabledAttribute}>
-          <input name="fc_${id}_end" data-range-handle="end" type="range" min="900" max="2100" step="25" value="${end}" aria-label="${label} ${t('flight.rangeMax')}" ${disabledAttribute}>
+          <input name="fc_${id}_start" data-range-handle="start" type="range" min="900" max="2100" step="${step}" value="${start}" aria-label="${label} ${t('flight.rangeMin')}" ${disabledAttribute}>
+          <input name="fc_${id}_end" data-range-handle="end" type="range" min="900" max="2100" step="${step}" value="${end}" aria-label="${label} ${t('flight.rangeMax')}" ${disabledAttribute}>
         </div>
         <div class="mode-range-scale" aria-hidden="true"><span>900</span><span>1200</span><span>1500</span><span>1800</span><span>2100</span></div>
       </div>
@@ -3912,6 +3943,115 @@ function renderOrientationCalibration(installEuler) {
     </div>`;
 }
 
+function validatedDrift(value, context) {
+  try { return validateDrift(value, context); }
+  catch (error) { throw new Error(t(`drift.error.${error.message}`)); }
+}
+
+function readDriftForm(form, context) {
+  if (!form?.elements.fc_drift_enabled) return validatedDrift(flightConfigValue('fc_drift', DRIFT_DEFAULTS), context);
+  const value = {
+    enabled: form.elements.fc_drift_enabled.checked,
+    channel: Number(form.elements.fc_drift_channel.value),
+    range: [Number(form.elements.fc_drift_start.value), Number(form.elements.fc_drift_end.value)],
+    ...Object.fromEntries(DRIFT_FIELDS.map(([key]) => [key, Number(form.elements[`fc_drift_${key}`].value)])),
+  };
+  return validatedDrift(value, context);
+}
+
+function driftStatusHtml() {
+  if (state.connectionStatus !== 'connected') return `<div class="helper">${t('drift.offline')}</div>`;
+  const d = state.driftStatus;
+  if (!d) return `<div class="helper">${t('drift.waiting')}</div>`;
+  const number = (value) => Number.isFinite(value) ? value.toFixed(1) : '—';
+  if (state.beginnerMode) return `<div class="metric"><span>${t('drift.state')}</span><strong>${escapeHtml(t(`drift.reason.${d.reason || 'inactive'}`))}</strong></div>
+    <div class="metric"><span>${t('drift.reduction')}</span><strong>${number(d.reduction_percent)} %</strong></div>`;
+  return `<div class="metric"><span>${t('drift.state')}</span><strong>${escapeHtml(t(`drift.reason.${d.reason || 'inactive'}`))}</strong></div>
+    <div class="metric"><span>${t('drift.rates')}</span><strong>${number(d.target_dps)} / ${number(d.measured_dps)} °/s</strong></div>
+    <div class="metric"><span>${t('drift.throttle')}</span><strong>${number(d.input_percent)} → ${number(d.output_percent)} %</strong></div>
+    <div class="metric"><span>${t('drift.reduction')}</span><strong>${number(d.reduction_percent)} %</strong></div>`;
+}
+
+function renderDriftSwitch() {
+  if (state.connectionStatus === 'connected' && !Object.hasOwn(config(), 'fc_drift')) return '';
+  const d = flightConfigValue('fc_drift', DRIFT_DEFAULTS);
+  const channels = (current) => pwmInputLabels.slice(4).map((label, index) =>
+    `<option value="${index + 5}" ${selected(current, index + 5)}>${label}</option>`).join('');
+  return `<div class="mode-config drift-switch-card">
+    <div class="mode-config-header"><div><h3>${t('drift.switchHeading')}</h3></div></div>
+    <div class="mode-range-list">
+    ${renderActivationRange('drift', t('drift.enabled'), t('drift.switchHelp'),
+      d.range, '#7c3aed', !d.enabled, d.channel, channels, 1)}
+    </div></div>`;
+}
+
+function renderDriftCard() {
+  if (state.connectionStatus === 'connected' && !Object.hasOwn(config(), 'fc_drift')) return `<details class="flight-setting-card"><summary>${t('drift.heading')}</summary><div class="flight-setting-card-body helper">${t('drift.unsupported')}</div></details>`;
+  const d = flightConfigValue('fc_drift', DRIFT_DEFAULTS);
+  const beginner = state.beginnerMode;
+  const detailed = !beginner && state.driftDetailed === true;
+  return `<details class="flight-setting-card drift-card">
+    <summary>${t('drift.heading')}</summary><div class="flight-setting-card-body">
+    <p class="helper">${t(beginner ? 'drift.beginnerHelp' : 'drift.help')}</p>
+    ${beginner ? '' : `<div class="check"><input type="checkbox" id="drift-detailed" data-drift-detailed ${detailed ? 'checked' : ''}><label for="drift-detailed">${t('drift.detailedParameters')}</label></div>`}
+    <div class="drift-beginner-settings" data-drift-simple ${detailed ? 'hidden' : ''}>
+    <div class="beginner-sensitivity-field"><label class="beginner-sensitivity-control" for="drift-sensitivity"><span class="beginner-sensitivity-label"><strong>${t('drift.strength')}</strong><output data-drift-strength-output></output></span><input type="range" id="drift-sensitivity" min="1" max="10" step="1" value="${Math.max(1, Math.round(d.max_reduction_percent / 3))}"></label><small class="helper">${t('drift.strengthHelp')}</small></div>
+    <p class="helper" data-drift-trigger></p><p class="helper">${t('drift.advancedPreserved')}</p>
+    </div>
+    <div class="filter-lpf-grid" data-drift-details ${detailed ? '' : 'hidden'}>
+    ${DRIFT_FIELDS.map(([key,min,max,unit]) => {
+      return `<div class="row"><label for="fc_drift_${key}">${t(`drift.${key}`)} (${unit})</label><input type="${detailed ? 'number' : 'hidden'}" id="fc_drift_${key}" name="fc_drift_${key}" min="${min}" max="${max}" step="${key.endsWith('_ms') ? 1 : 'any'}" value="${escapeHtml(d[key])}" ${detailed ? 'required' : ''}><small class="helper">${t(`drift.hint.${key}`)}</small></div>`;
+    }).join('')}
+    </div><div data-drift-status>${driftStatusHtml()}</div>
+    <div class="actions"><button type="button" class="secondary" data-action="drift-reset">${t('drift.reset')}</button></div>
+    </div></details>`;
+}
+
+function resetDriftForm() {
+  const form = document.querySelector('#flight-form');
+  if (!form?.elements.fc_drift_enabled) return;
+  form.elements.fc_drift_enabled.checked = false;
+  form.elements.fc_drift_channel.value = DRIFT_DEFAULTS.channel;
+  form.elements.fc_drift_start.value = DRIFT_DEFAULTS.range[0];
+  form.elements.fc_drift_end.value = DRIFT_DEFAULTS.range[1];
+  form.elements.fc_drift_enabled.dispatchEvent(new Event('change', {bubbles: true}));
+  form.elements.fc_drift_start.dispatchEvent(new Event('input', {bubbles: true}));
+  DRIFT_FIELDS.forEach(([key]) => { form.elements[`fc_drift_${key}`].value = DRIFT_DEFAULTS[key]; });
+  const sensitivity = form.querySelector('#drift-sensitivity');
+  if (sensitivity) sensitivity.value = 5;
+  syncDriftBeginnerSummary();
+}
+
+function syncDriftBeginnerSummary() {
+  const form = document.querySelector('#flight-form');
+  const output = form?.querySelector('[data-drift-strength-output]');
+  if (!output) return;
+  const level = Number(form.querySelector('#drift-sensitivity').value);
+  output.textContent = Number(form.elements.fc_drift_max_reduction_percent.value) === level * 3
+    ? t('flight.beginnerSensitivityValue', {level}) : t('drift.customSensitivity');
+  const start = Number(form.elements.fc_drift_start.value);
+  const end = Number(form.elements.fc_drift_end.value);
+  form.querySelector('[data-drift-trigger]').textContent = t(
+    start === 1700 && end === 2100 ? 'drift.triggerHigh' : 'drift.triggerCustom',
+    {channel: form.elements.fc_drift_channel.value, start, end});
+}
+
+function syncDriftParameterMode() {
+  const card = document.querySelector('.drift-card');
+  if (!card) return;
+  const detailed = card.querySelector('[data-drift-detailed]')?.checked === true;
+  card.querySelector('[data-drift-simple]').hidden = detailed;
+  const fields = card.querySelector('[data-drift-details]');
+  fields.hidden = !detailed;
+  fields.querySelectorAll('input').forEach(input => {
+    input.type = detailed ? 'number' : 'hidden';
+    input.required = detailed;
+  });
+  card.querySelector('#drift-sensitivity').value = Math.max(1,
+    Math.round(Number(card.querySelector('#fc_drift_max_reduction_percent').value) / 3));
+  syncDriftBeginnerSummary();
+}
+
 function renderFlight() {
   const motors = motorCount();
   const ratePid = flightConfigValue('fc_rate_pid', []);
@@ -3963,6 +4103,8 @@ function renderFlight() {
             </div>
           </section>
           ${renderOrientationCalibration(installEuler)}
+          ${renderDriftSwitch()}
+          ${renderDriftCard()}
           <div class="actions"><button class="primary" ${state.busy || state.imuCalibration.busy || state.orientationCal.busy || !state.target || state.profileImportError ? 'disabled' : ''}>${t('action.save')}</button><button class="secondary" type="button" data-action="reboot" ${state.busy || state.imuCalibration.busy || state.orientationCal.busy ? 'disabled' : ''}>${t('action.reboot')}</button></div>
         </form>
       </section>`;
@@ -3997,6 +4139,8 @@ function renderFlight() {
             ${renderActivationRange('wifi_coexist', t('flight.wifiCoexist'), t('flight.wifiCoexistDescription'), wifiConditions.coexist?.slice(1) ?? [1700, 2100], '#0891b2', !wifiConditions.coexist, wifiConditions.coexist?.[0] ?? 7, auxOptions)}
           </div>
         </div>
+        ${renderDriftSwitch()}
+        ${renderDriftCard()}
         <div class="filter-config">
           <div class="filter-config-header"><div><h3>${t('flight.filterSettings')}</h3></div></div>
           <div class="filter-config-body">
@@ -4861,6 +5005,16 @@ function render() {
 }
 
 function wireEvents() {
+  syncDriftBeginnerSummary();
+  document.querySelector('[data-drift-detailed]')?.addEventListener('change', (event) => {
+    state.driftDetailed = event.target.checked;
+    syncDriftParameterMode();
+  });
+  document.querySelector('#drift-sensitivity')?.addEventListener('input', (event) => {
+    document.querySelector('#fc_drift_max_reduction_percent').value = Number(event.target.value) * 3;
+    syncDriftBeginnerSummary();
+  });
+  document.querySelector('[name="fc_drift_channel"]')?.addEventListener('change', syncDriftBeginnerSummary);
   document.querySelector('[data-expert-mode]')?.addEventListener('change', (event) => {
     state.beginnerMode = !event.target.checked;
     persistMode();
@@ -5058,6 +5212,7 @@ function wireEvents() {
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => {
       const action = button.dataset.action;
+      if (action === 'drift-reset') resetDriftForm();
       if (action === 'refresh') void connectDevice(t('message.refreshed'));
       if (action === 'reboot') void rebootDevice();
       if (action === 'reset-model') postPlain('/reset?model', t('message.modelReset'));
@@ -5112,11 +5267,12 @@ function wireModeRangeEditors() {
     if (source === 'number-start' && startNumber.value !== '') startSlider.value = startNumber.value;
     if (source === 'number-end' && endNumber.value !== '') endSlider.value = endNumber.value;
 
-    let start = clamp(intOrDefault(startSlider.value, 900), 900, 2075);
-    let end = clamp(intOrDefault(endSlider.value, 2100), 925, 2100);
-    if (start > end - 25) {
-      if (source.includes('start')) start = end - 25;
-      else end = start + 25;
+    const step = Number(startSlider.step);
+    let start = clamp(intOrDefault(startSlider.value, 900), 900, 2100 - step);
+    let end = clamp(intOrDefault(endSlider.value, 2100), 900 + step, 2100);
+    if (start > end - step) {
+      if (source.includes('start')) start = end - step;
+      else end = start + step;
     }
 
     startSlider.value = String(start);
@@ -5125,6 +5281,7 @@ function wireModeRangeEditors() {
     endNumber.value = String(end);
     card.style.setProperty('--range-start', `${((start - 900) / 1200) * 100}%`);
     card.style.setProperty('--range-end', `${((end - 900) / 1200) * 100}%`);
+    if (startSlider.name === 'fc_drift_start') syncDriftBeginnerSummary();
   };
 
   document.querySelectorAll('[data-mode-range]').forEach((card) => {
@@ -5173,7 +5330,8 @@ function wireModeRangeEditors() {
 
         const moveRange = (moveEvent) => {
           const rawDelta = ((moveEvent.clientX - initialX) / trackWidth) * 1200;
-          const delta = Math.round(rawDelta / 25) * 25;
+          const step = Number(startSlider.step);
+          const delta = Math.round(rawDelta / step) * step;
           const nextStart = clamp(initialStart + delta, 900, 2100 - width);
           startSlider.value = String(nextStart);
           endSlider.value = String(nextStart + width);
