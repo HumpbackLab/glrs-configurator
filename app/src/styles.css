@@ -2274,6 +2274,14 @@ button:disabled {
 
 .flight-setting-card-body { padding: 16px; }
 
+details.flight-setting-card > summary {
+  padding: 14px 16px;
+  background: #f2f5f8;
+  color: #253044;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .beginner-sensitivity-card {
   background: #fff;
   border: 1px solid #d8dee6;
@@ -2304,6 +2312,8 @@ button:disabled {
 .beginner-sensitivity-label strong { color: #253044; font-size: 13px; }
 .beginner-sensitivity-label output { color: #0f766e; font-size: 12px; white-space: nowrap; }
 .beginner-sensitivity-field input { accent-color: #1f7a6d; }
+.drift-beginner-settings { display: grid; gap: 12px; }
+.drift-card [hidden] { display: none; }
 .beginner-sensitivity-field input[type="range"] { cursor: ew-resize; width: 100%; }
 .beginner-reverse-feedback { align-items: center; color: #4b5563; cursor: pointer; display: flex; font-size: 12px; gap: 7px; width: fit-content; }
 .beginner-reverse-feedback input { cursor: pointer; margin: 0; }
