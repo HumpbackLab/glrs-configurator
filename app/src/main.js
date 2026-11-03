@@ -58,6 +58,12 @@ const state = {
   driftDetailed: false,
   configResponse: null,
   hardware: null,
+  am32Available: false,
+  am32Connected: false,
+  am32Writable: false,
+  am32Data: null,
+  am32Device: '',
+  am32Pin: null,
   bindingPhrase: '',
   originalUid: [],
   originalUidType: '',
@@ -190,6 +196,7 @@ const tabs = [
   ['flight', () => t('tab.flight')],
   ['debug', () => t('tab.debug')],
   ['hardware', () => t('tab.hardware')],
+  ['am32', () => t('tab.am32')],
   ['wifi', () => t('tab.wifi')],
   ['update', () => t('tab.update')],
 ];
@@ -777,6 +784,13 @@ async function loadDevice() {
   state.driftStatus = Object.hasOwn(config(), 'fc_drift')
     ? (await apiFetch('/status.json', {timeout: 2000}).catch(() => null))?.drift ?? null : null;
   state.hardware = hardwareResponse;
+  const am32Status = await apiFetch('/am32/status', {timeout: 2000}).catch(() => null);
+  state.am32Available = Boolean(am32Status?.ok);
+  state.am32Connected = Boolean(am32Status?.connected);
+  state.am32Writable = Boolean(am32Status?.writable);
+  state.am32Pin = Number.isInteger(am32Status?.pin) ? am32Status.pin : null;
+  state.am32Data = null;
+  if (!state.am32Available && state.tab === 'am32') state.tab = 'status';
   state.imuCalibration = {
     busy: '',
     accelFaces: Array(6).fill(null),
@@ -4665,6 +4679,40 @@ function renderUpdate() {
     </div>`;
 }
 
+function renderAm32() {
+  const data = state.am32Data;
+  const byte = offset => data ? parseInt(data.slice(offset * 2, offset * 2 + 2), 16) : '';
+  return `<section class="panel"><h2>${t('am32.title')}</h2>
+    <p>${t('am32.safety')}</p>
+    <div class="actions">
+      <button class="primary" type="button" data-action="am32-connect" ${state.busy ? 'disabled' : ''}>${t('am32.connect')}</button>
+      <button class="secondary" type="button" data-action="am32-read" ${!state.am32Connected || state.busy ? 'disabled' : ''}>${t('am32.read')}</button>
+      <button class="danger" type="button" data-action="am32-exit" ${state.busy ? 'disabled' : ''}>${t('am32.exit')}</button>
+    </div>
+    <p>${t('am32.pin')}: ${state.am32Pin ?? '-'}</p>
+    <p>${t('am32.device')}: ${escapeHtml(state.am32Device || '-')}</p>
+    <form id="am32-form">
+      <div class="row"><label>${t('am32.direction')}</label><input name="direction" type="number" min="0" max="1" value="${byte(17)}" required></div>
+      <div class="row"><label>${t('am32.startup')}</label><input name="startup" type="number" min="0" max="255" value="${byte(25)}" required></div>
+      <div class="row"><label>${t('am32.poles')}</label><input name="poles" type="number" min="0" max="255" value="${byte(27)}" required></div>
+      <details><summary>${t('am32.raw')}</summary><textarea name="raw" rows="8" style="width:100%;font-family:monospace">${data || ''}</textarea></details>
+      <div class="actions"><button class="primary" type="submit" ${!data || !state.am32Writable || state.busy ? 'disabled' : ''}>${t('am32.save')}</button></div>
+    </form></section>`;
+}
+
+async function am32Action(action, data) {
+  await runBusy(async () => {
+    const result = await apiFetch('/am32', {method: 'POST', body: JSON.stringify({action, ...(data ? {data} : {})}), timeout: 12000});
+    state.am32Connected = Boolean(result.connected);
+    state.am32Writable = Boolean(result.writable);
+    if (Number.isInteger(result.pin)) state.am32Pin = result.pin;
+    if (result.data) state.am32Data = result.data;
+    if (result.device) state.am32Device = result.device;
+    if (action === 'exit') { state.am32Connected = false; state.am32Data = null; }
+    setMessage('ok', result.message);
+  });
+}
+
 function renderCurrentTab() {
   return {
     status: renderStatus,
@@ -4674,6 +4722,7 @@ function renderCurrentTab() {
     flight: renderFlight,
     debug: renderDebug,
     hardware: renderHardwareJson,
+    am32: renderAm32,
     wifi: renderWifi,
     update: renderUpdate,
   }[state.tab]();
@@ -4992,7 +5041,7 @@ function render() {
         </form>
       </header>
       <div class="shell">
-        <nav class="nav">${tabs.map(([id, getLabel]) => `<button type="button" data-tab="${id}" class="${state.tab === id ? 'active' : ''}">${getLabel()}</button>`).join('')}</nav>
+        <nav class="nav">${tabs.filter(([id]) => id !== 'am32' || state.am32Available).map(([id, getLabel]) => `<button type="button" data-tab="${id}" class="${state.tab === id ? 'active' : ''}">${getLabel()}</button>`).join('')}</nav>
         <main class="content">
           ${state.message ? `<div class="message ${state.message.type}">${escapeHtml(state.message.text)}</div>` : ''}
           ${state.busy ? `<div class="notice">${t('notice.working')}</div>` : ''}
@@ -5209,10 +5258,32 @@ function wireEvents() {
   initOrientationAircraftView();
   drawPidCharts();
 
+  document.querySelector('#am32-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    let hex = form.elements.raw.value.replace(/\s/g, '').toUpperCase();
+    if (!/^[0-9A-F]{384}$/.test(hex)) { setMessage('error', t('am32.invalidRaw')); return; }
+    for (const [name, offset, max] of [['direction', 17, 1], ['startup', 25, 255], ['poles', 27, 255]]) {
+      const value = Number(form.elements[name].value);
+      if (!Number.isInteger(value) || value < 0 || value > max) { setMessage('error', t('am32.invalidValue')); return; }
+      hex = hex.slice(0, offset * 2) + value.toString(16).padStart(2, '0').toUpperCase() + hex.slice(offset * 2 + 2);
+    }
+    void am32Action('save', hex);
+  });
+  document.querySelector('#am32-form textarea[name="raw"]')?.addEventListener('input', (event) => {
+    const hex = event.target.value.replace(/\s/g, '');
+    if (!/^[0-9a-fA-F]{384}$/.test(hex)) return;
+    const form = event.target.form;
+    for (const [name, offset] of [['direction', 17], ['startup', 25], ['poles', 27]])
+      form.elements[name].value = parseInt(hex.slice(offset * 2, offset * 2 + 2), 16);
+  });
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => {
       const action = button.dataset.action;
       if (action === 'drift-reset') resetDriftForm();
+      if (action === 'am32-connect') void am32Action('connect');
+      if (action === 'am32-read') void am32Action('read');
+      if (action === 'am32-exit') void am32Action('exit');
       if (action === 'refresh') void connectDevice(t('message.refreshed'));
       if (action === 'reboot') void rebootDevice();
       if (action === 'reset-model') postPlain('/reset?model', t('message.modelReset'));

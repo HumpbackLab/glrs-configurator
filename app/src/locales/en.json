@@ -15,7 +15,8 @@
     "debug": "Debug",
     "hardware": "Hardware JSON",
     "wifi": "WiFi",
-    "update": "Update"
+    "update": "Update",
+    "am32": "AM32"
   },
   "action": {
     "connect": "Connect",
@@ -627,5 +628,21 @@
       "releasing": "Returning to manual throttle",
       "switch_off": "Remote switch off"
     }
+  },
+  "am32": {
+    "title": "AM32 ESC settings",
+    "safety": "Requires AM32 bootloader protocol 3 or newer. Remove the propeller first. After exit, motor output waits for a fresh link and zero throttle.",
+    "connect": "Connect ESC",
+    "read": "Read settings",
+    "exit": "Exit configuration",
+    "device": "Device info",
+    "pin": "ESC signal GPIO",
+    "direction": "Motor direction (0 normal, 1 reversed)",
+    "startup": "Startup power (0–255)",
+    "poles": "Motor poles (0–255)",
+    "raw": "Full 192-byte settings (hex)",
+    "save": "Save and verify",
+    "invalidRaw": "Settings must be exactly 192 hexadecimal bytes",
+    "invalidValue": "Invalid setting value"
   }
 }

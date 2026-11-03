@@ -15,7 +15,8 @@
     "debug": "调试",
     "hardware": "硬件 JSON",
     "wifi": "WiFi",
-    "update": "更新"
+    "update": "更新",
+    "am32": "AM32"
   },
   "action": {
     "connect": "连接",
@@ -627,5 +628,21 @@
       "releasing": "平滑恢复手动油门",
       "switch_off": "遥控开关关闭"
     }
+  },
+  "am32": {
+    "title": "AM32 电调配置",
+    "safety": "需要 AM32 引导程序协议 3 或更新版本。请先拆下螺旋桨；退出后须重新建立控制链路并将油门归零，才恢复电机输出。",
+    "connect": "连接电调",
+    "read": "读取参数",
+    "exit": "退出配置",
+    "device": "设备信息",
+    "pin": "电调信号 GPIO",
+    "direction": "电机方向（0 正转，1 反转）",
+    "startup": "启动功率（0–255）",
+    "poles": "电机极数（0–255）",
+    "raw": "完整 192 字节参数（十六进制）",
+    "save": "保存并校验",
+    "invalidRaw": "参数必须为 192 字节十六进制数据",
+    "invalidValue": "参数值无效"
   }
 }
