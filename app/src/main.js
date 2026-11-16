@@ -3,6 +3,7 @@ import {DRIFT_DEFAULTS, DRIFT_FIELDS, validateDrift} from './drift.js';
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { t, setLocale, getLocale } from './i18n.js';
+import {localizedProfileTitle} from './locale.js';
 
 const DEFAULT_API = 'http://10.0.0.1';
 const API_STORAGE_KEY = 'elrs-local-rx-api';
@@ -3009,7 +3010,7 @@ function communityFilteredProfiles() {
   return state.communityCatalog.profiles.filter((item) => {
     if (state.communityCatalog.vehicleType && communityVehicleType(item) !== state.communityCatalog.vehicleType) return false;
     if (!query) return true;
-    return [item.title, item.authorName, item.vehicleType, item.target, ...(item.tags || [])]
+    return [item.title, item.titleEn, item.authorName, item.vehicleType, item.target, ...(item.tags || [])]
       .some((value) => String(value || '').toLocaleLowerCase().includes(query));
   });
 }
@@ -3035,6 +3036,7 @@ function renderCommunityProfileCards() {
   if (!profiles.length) return `<div class="community-catalog-empty">${t('community.catalog.empty')}</div>`;
   const currentTarget = state.target?.target || config().target || '';
   return profiles.map((item) => {
+    const title = localizedProfileTitle(item, getLocale());
     const busy = state.communityCatalog.busyId === item.id;
     const compatible = Boolean(currentTarget && item.target && currentTarget === item.target);
     const usage = communityUsageInstructions(state.communityCatalog.usageById[item.id]);
@@ -3043,10 +3045,10 @@ function renderCommunityProfileCards() {
     const imageUrl = state.communityCatalog.imageDataByUrl[remoteImageUrl] || remoteImageUrl;
     return `<article class="community-profile-card">
       <div class="community-profile-heading">
-        <div><h3>${escapeHtml(item.title)}</h3><span>${escapeHtml(item.authorName || t('value.unknown'))}</span></div>
+        <div><h3>${escapeHtml(title)}</h3><span>${escapeHtml(item.authorName || t('value.unknown'))}</span></div>
         ${compatible ? `<span class="community-compatible">${t('community.catalog.compatible')}</span>` : ''}
       </div>
-      ${imageUrl ? `<img class="community-profile-image" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(item.title)}" loading="lazy">` : ''}
+      ${imageUrl ? `<img class="community-profile-image" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(title)}" loading="lazy">` : ''}
       <div class="community-profile-meta">
         <span>${t('community.catalog.target')}: <strong>${escapeHtml(item.target || t('value.unknown'))}</strong></span>
         <span>${t('community.catalog.pwm')}: <strong>${escapeHtml(item.profileSummary?.pwmOutputCount ?? 0)}</strong></span>
@@ -3210,7 +3212,7 @@ async function handleCommunityProfileAction(action, id) {
         return;
       }
       state.communityCatalog.busyId = '';
-      state.message = {type: 'ok', text: t('message.communityProfileDownloaded', {title: item.title})};
+      state.message = {type: 'ok', text: t('message.communityProfileDownloaded', {title: localizedProfileTitle(item, getLocale())})};
       render();
       return;
     }

@@ -1,17 +1,17 @@
 import en from './locales/en.json';
 import zhCN from './locales/zh-CN.json';
+import {resolveLocale} from './locale.js';
 
 const LOCALE_STORAGE_KEY = 'elrs-locale';
-const DEFAULT_LOCALE = 'zh-CN';
 
 const messages = {en, 'zh-CN': zhCN};
 
 let currentLocale = loadLocale();
+document.documentElement.lang = currentLocale;
 
 function loadLocale() {
-  const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
-  if (stored && messages[stored]) return stored;
-  return DEFAULT_LOCALE;
+  return resolveLocale(localStorage.getItem(LOCALE_STORAGE_KEY),
+    navigator.languages?.length ? navigator.languages : [navigator.language]);
 }
 
 function resolve(obj, path) {
